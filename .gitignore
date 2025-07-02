@@ -1,0 +1,46 @@
+# ======================================================
+# ✅ MEDICAL SEGMENTATION DECATHLON – .gitignore CONFIG
+# ======================================================
+
+# 🔒 Ignore experiment logs & model checkpoints
+experiments/
+*.ckpt
+*.h5
+*.tfrecord
+*.npz
+*.npy
+*.joblib
+
+# 📓 Ignore Colab + Jupyter notebook junk
+.ipynb_checkpoints/
+
+# 🧪 Ignore TensorBoard logs
+logs/
+events.out.tfevents*
+
+# ⚙️ Ignore Python cache & compiled files
+__pycache__/
+*.py[cod]
+*.so
+*.pyd
+*.pyo
+
+# 📦 Ignore environment + dependency artifacts
+.env
+.venv/
+Pipfile.lock
+poetry.lock
+
+# 🧠 IDE/editor specific folders
+.vscode/
+.idea/
+
+# 🧼 OS-specific clutter
+.DS_Store
+Thumbs.db
+
+# ❌ Avoid uploading raw datasets or NIfTI files accidentally
+*.nii
+*.nii.gz
+data/
+
