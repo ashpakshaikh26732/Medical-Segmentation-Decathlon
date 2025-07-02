@@ -1,0 +1,26 @@
+# Ignore model checkpoints and logs
+experiments/
+*.ckpt
+*.h5
+*.npz
+*.npy
+logs/
+
+# Ignore Colab checkpoints
+.ipynb_checkpoints/
+
+# Ignore TFRecords or large data dumps
+*.tfrecord
+
+# VS Code / PyCharm / IDE junk
+.vscode/
+.idea/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# OS/system junk
+.DS_Store
+Thumbs.db
+
