@@ -21,6 +21,24 @@ class convolutional_Block_For_Unet_Plus_Plus(tf.keras.models.Model):
       x=layer(x)
     return x
 
-class encoder_for_unet_plus_plus(tf.keras.models.Model): 
-  def __init__(self , input_shape ):
-    pass 
+class encoder(tf.keras.models.Model): 
+  def __init__(self , input_shape ,dropout_rate=0.3 ):
+    base = tf.keras.applications.resnet50.ResNet50(include_top=False , weights="imagenet" , input_shape=input_shape) 
+    self.layer_names = [
+            'conv1_relu',
+            'conv2_block3_out',
+            'conv3_block4_out',
+            'conv4_block6_out'
+        ]
+    self.backbone = tf.keras.models.Model(inputs = base.input , outputs = [base.get_layer(layer) for layer in self.layer_names])
+    self.pool = [tf.keras.layers.MaxPooling2D((2,2) , name = f"encdoer pool - {i+1}") for i in range(4)]
+
+  def call(self , inputs ) : 
+    feats = self.backbone(inputs)
+    pools = [] 
+    for i , feat in enumerate(feats): 
+      p=self.pool[i](feat)
+      p = self.backbone[i](p)
+      pools.append(p)
+
+    return feats , pools
