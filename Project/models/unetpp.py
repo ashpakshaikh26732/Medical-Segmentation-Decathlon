@@ -1,5 +1,8 @@
 import sys, os
+import tensorflow as tf 
 
+from tensorflow.keras import mixed_precision
+mixed_precision.set_global_policy("mixed_float16")
 # # Optional: Mount Drive
 # from google.colab import drive
 # drive.mount('/content/drive')
@@ -9,7 +12,7 @@ repo_path = "/content/drive/MyDrive/Medical-Segmentation-Decathlon"
 sys.path.append(repo_path)
 sys.path.append(os.path.join(repo_path, "Project"))
 
-import tensorflow as tf 
+
 
 
 class convolutional_Block(tf.keras.layers.Layer):
@@ -176,4 +179,6 @@ class UNET_PLUS_PLUS(tf.keras.models.Model):
         f1,f2,f3,f4=convs
         output_01 , output_02,output_03,output_04=self.decoder((f1,f2,f3,f4,f5))  
         return output_01 , output_02, output_03, output_04
+
+
 
