@@ -15,8 +15,8 @@ from models.unetpp import *
 class multi_layer_preceptron_part(tf.keras.layers.Layer): 
     def __init__(self,d_model): 
         super().__init__() 
-        self.layer1 = tf.keras.layers.Dense(d_model*4 , activation='gelu')
-        self.layer2 = tf.keras.layers.Dense(d_model) 
+        self.layer1 = tf.keras.layers.Dense(d_model*4 , activation='gelu' ,  kernel_regularizer=tf.keras.regularizers.l2(1e-5))
+        self.layer2 = tf.keras.layers.Dense(d_model ,  kernel_regularizer=tf.keras.regularizers.l2(1e-5)) 
     def call(self, inputs ): 
         x=self.layer1(inputs)
         x = self.layer2(x)
@@ -24,9 +24,11 @@ class multi_layer_preceptron_part(tf.keras.layers.Layer):
 
 
 class Transformer_encoder(tf.keras.layers.Layer):
-    def __init__(self , num_heads = 16 , key_dim=64 , d_model=256 ): 
+    def __init__(self , num_heads = 16 , key_dim=64 , d_model=256  , dropout_rate =0.1): 
         super().__init__()
         self.multihead_attention = tf.keras.layers.MultiHeadAttention(num_heads=num_heads , key_dim=key_dim)
+        self.attn_dropout = tf.keras.layers.Dropout(dropout_rate)
+        self.ffn_dropout = tf.keras.layers.Dropout(dropout_rate)
         self.add1 = tf.keras.layers.Add()
         self.add2 = tf.keras.layers.Add() 
         self.norm1 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
@@ -35,9 +37,11 @@ class Transformer_encoder(tf.keras.layers.Layer):
     def call(self,inputs): 
         x =inputs 
         x=self.multihead_attention(x,x,x)
+        x=self.attn_dropout(x)
         x=self.add1([inputs,x])
         p=self.norm1(x)
         x=self.mhp(p)
+        x= self.ffn_dropout(x)
         x=self.add2([p,x])
         x=self.norm2(x)
         return x 
