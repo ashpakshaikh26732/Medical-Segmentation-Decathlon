@@ -12,7 +12,9 @@ from Project.src.callbacksTrainingLogger import *
 from Project.src.callbacks.early_stoping import * 
 from Project.src.callbacks.learning_rate_sceduler import * 
 
-class MasterCallback(tf.keras.callbacks.Callback):
+
+
+class master_callback(tf.keras.callbacks.Callback):
     """A master callback that composes and manages all other training callbacks.
 
     This callback acts as a single, centralized controller for all training
@@ -32,17 +34,17 @@ class MasterCallback(tf.keras.callbacks.Callback):
             early_stopping_params, etc.).
         model (tf.keras.Model): The Keras model instance.
         optimizer (tf.keras.optimizers.Optimizer): The Keras optimizer instance.
-    
+
     Example:
     # In your custom training loop:
-    # master_cb = MasterCallback(config, model, optimizer)
-    # start_epoch = master_cb.on_train_begin()
+    # master_cb = master_callback(config, model, optimizer)
+    # start_epoch = master_cb.on_train_begain()
     #
     # for epoch in range(start_epoch, total_epochs):
-    #     master_cb.on_epoch_begin(epoch)
+    #     master_cb.on_epoch_begain(epoch)
     #     for step, batch in enumerate(train_dataset):
     #         global_step = epoch * steps_per_epoch + step
-    #         master_cb.on_batch_begin(global_step)
+    #         master_cb.on_batch_begain(global_step)
     #         # ... train step logic ...
     #         master_cb.on_batch_end(step, epoch, batch_logs)
     #
@@ -52,49 +54,44 @@ class MasterCallback(tf.keras.callbacks.Callback):
     #     if should_stop:
     #         break
     """
-    def __init__(self, config, model, optimizer):
+    def __init__(self, config , model , optimizer):
         super().__init__()
-        self.config = config
-        self.model = model
-        self.optimizer = optimizer
-        
-
-        self.checkpoint_callback = CheckpointCallback(
-            config=self.config, 
-            model=self.model, 
-            optimizer=self.optimizer
-        )
-        self.learning_rate_scheduler = LearningRateScheduler(
-            config=self.config, 
-            optimizer=self.optimizer
-        )
-        self.early_stopping_callback = EarlyStoppingCallback(config=self.config)
-        self.training_logger = TrainingLogger(config=self.config)
-
-
-        log_dir = self.config['data'].get('log_dir', 'logs/')
-        self.writer = tf.summary.create_file_writer(log_dir)
+        self.writer = tf.summary.create_file_writer()
         self.stop = False
+        self.checkpoint_dir = config['checkpoint']['checkpoint_dir']
+        self.model = model
+        self.config = config
+        self.optimizer = optimizer
+        self.target_lr = self.config['checkpoint']['target_lr']
+        self.warmup_step = self.config['checkpoint']['warmup_step']
+        self.min_delta  = self.config['checkpoint']['min_delta']
+        self.patiance = self.config['checkpoint']['patiance']
+        self.batches_per_epoch = self.config['checkpoint']['batches_per_epoch']
+        self.total_steps = self.config['checkpoint']['total_step']
+        self.checkpoint_callback = CheckpointCallback(checkpoint_dir=self.checkpoint_dir , model=self.model , optimizer=self.optimizer)
+        self.learning_rate_schduler = LearningRateScheduler(optimizer=self.optimizer, target_lr=self.target_lr,warmup_step=self.warmup_step , total_step=self.total_steps)
+        self.EarlyStoppingCallback = EarlyStoppingCallback(min_delta=self.min_delta , patience=self.patiance)
+        self.TrainingLogger = TrainingLogger(batches_per_epoch=self.batches_per_epoch)
 
-    def on_train_begin(self, logs=None):
+    def on_train_begain(self):
         """Loads the latest checkpoint and returns the starting epoch."""
         return self.checkpoint_callback.load_latest_model()
-    
-    def on_epoch_begin(self, epoch, logs=None):
-        """Delegates to the logger to signal the start of an epoch."""
-        self.training_logger.on_epoch_begin(epoch=epoch)
 
-    def on_batch_begin(self, global_step, logs=None):
+    def on_epoch_begain(self,epoch ):
+        """Delegates to the logger to signal the start of an epoch."""
+        return self.TrainingLogger.on_epoch_begin(epoch=epoch)
+
+    def on_batch_begain(self,global_step):
         """Delegates to the learning rate scheduler to update the LR."""
-        self.learning_rate_scheduler.on_batch_begin(global_step=global_step)
-    
-    def on_batch_end(self, batch, epoch, data):
+        return self.learning_rate_schduler.on_batch_begin(global_step=global_step)
+
+    def on_batch_end(self, batch , epoch ,data):
         """Delegates to the logger to update batch-wise metrics."""
-        self.training_logger.on_batch_end(batch=batch, epoch=epoch, data=data)
-    
-    def on_epoch_end(self, epoch, data):
+        return self.TrainingLogger.on_batch_end(batch=batch  , epoch = epoch , data=data)
+
+    def on_epoch_end(self, epoch ,data):
         """Delegates logging and checkpointing, logs to TensorBoard, and checks for early stopping.
-        
+
         Args:
             epoch (int): The current epoch number.
             data (dict): A dictionary containing all final logs for the epoch.
@@ -102,30 +99,30 @@ class MasterCallback(tf.keras.callbacks.Callback):
         Returns:
             bool: A flag indicating if training should stop.
         """
+        self.TrainingLogger.on_epoch_end(epoch = epoch , data = data)
 
-        self.training_logger.on_epoch_end(epoch=epoch, data=data)
+        per_class_iou = data['metrics']['per_class_iou']
+        per_class_iou_val = data['metrics']['per_class_iou_val']
+        per_class_dice = data['metrics']['per_class_dice']
+        per_class_dice_val = data['metrics']['per_class_dice_val']
 
+        with self.writer.as_default() :
+            tf.summary.scalar('loss' , data['loss'], step = epoch)
+            tf.summary.scalar('val_loss' , data['val_loss'] , step = epoch)
 
-        with self.writer.as_default():
-            tf.summary.scalar('loss', data['loss'], step=epoch)
-            tf.summary.scalar('val_loss', data['val_loss'], step=epoch)
+            for key, value in per_class_iou.items():
+                tf.summary.scalar('iou_' + key , value , step = epoch)
 
-            for key, value in data['metrics']['per_class_iou'].items():
-                tf.summary.scalar(f'iou/{key}', value, step=epoch)
-            for key, value in data['metrics']['per_class_iou_val'].items():
-                tf.summary.scalar(f'val_iou/{key}', value, step=epoch)
-            for key, value in data['metrics']['per_class_dice'].items():
-                tf.summary.scalar(f'dice/{key}', value, step=epoch)
-            for key, value in data['metrics']['per_class_dice_val'].items():
-                tf.summary.scalar(f'val_dice/{key}', value, step=epoch)
+            for key, value in per_class_iou_val.items():
+                tf.summary.scalar('val_iou_' + key , value , step = epoch)
+
+            for key, value in per_class_dice.items():
+                tf.summary.scalar('dice_' + key , value , step = epoch)
+
+            for key, value in per_class_dice_val.items():
+                tf.summary.scalar('val_dice_'+key , value , step = epoch)
+
         self.writer.flush()
-        
-
-        self.checkpoint_callback.on_epoch_end(epoch=epoch)
-        
-
-        self.stop = self.early_stopping_callback.on_epoch_end(
-            val_loss=data['val_loss'], 
-            epoch=epoch
-        )
+        self.checkpoint_callback.on_epoch_end(epoch=epoch )
+        self.stop =  self.EarlyStoppingCallback.on_epoch_end(val_loss=data['val_loss'],epoch = epoch)
         return self.stop

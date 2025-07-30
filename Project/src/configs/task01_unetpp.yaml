@@ -1,0 +1,27 @@
+#this yaml file for task01 unet ++ model
+
+task01_datapipeline : 
+    data : 
+        modality : 'MRI' 
+        val_count : 24 
+        image_address : '/content/Task01_BrainTumour/imagesTr'
+        label_address : '/content/Task01_BrainTumour/labelsTr' 
+        num_classes : 3 
+        batch : 1 
+        num_replicas : 8 
+        image_shape : [240,240,155,4] 
+        label_shape : [240,240,155,1]
+        patch_shape : [80,80,52,4] 
+        num_patches : 27 
+
+    checkpoint : 
+        checkpoint_dir : 'gs://medical_segmentation_decthlon_task01/checkpoints/'
+        total_step : 100 
+        warmup_step : 10 
+        target_lr : 3e-4 
+        min_delta : 1e-4 
+        patiance : 15 
+        batches_per_epoch : 20
+        log_dir : 'gs://medical_segmentation_decthlon_task01/logs/'
+        
+        
