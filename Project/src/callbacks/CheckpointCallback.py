@@ -30,10 +30,10 @@ class CheckpointCallback(tf.keras.callbacks.Callback):
 
 
     """
-    def __init__(self, config, model, optimizer):
+    def __init__(self, checkpoint_dir, model, optimizer):
         super().__init__()
-        self.config  = config
-        self.checkpoint_dir = config['data']['checkpoint_dir']
+
+        self.checkpoint_dir = checkpoint_dir
         self.model = model
         self.optimizer = optimizer
 

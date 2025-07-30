@@ -8,7 +8,7 @@ mixed_precision.set_global_policy("mixed_float16")
 # Add repo + Project folder to path
 repo_path = "/content/drive/MyDrive/Medical-Segmentation-Decathlon"
 sys.path.append(repo_path)
-# sys.path.append(os.path.join(repo_path, "Project"))
+
 
 from Project.models.unetpp import *
 

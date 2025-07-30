@@ -32,11 +32,11 @@ class LearningRateScheduler(tf.keras.callbacks.Callback):
     
 
     """
-    def __init__(self, config, optimizer):
+    def __init__(self, total_step,target_lr,warmup_step, optimizer):
         super().__init__()
-        self.total_steps = config['data']['total_step']
-        self.target_lr = config['data']['target_lr']
-        self.warmup_steps = config['data']['warmup_step']
+        self.total_steps = total_step
+        self.target_lr = target_lr
+        self.warmup_steps = warmup_step
         self.optimizer = optimizer
         self.pi = tf.constant(math.pi, dtype=tf.float32)
 

@@ -8,7 +8,6 @@ repo_path = "/content/drive/MyDrive/Medical-Segmentation-Decathlon"
 sys.path.append(repo_path)
 
 
-import tensorflow as tf
 
 class EarlyStoppingCallback(tf.keras.callbacks.Callback):
     """A custom Keras Callback to stop training when validation loss stops improving.
@@ -25,11 +24,11 @@ class EarlyStoppingCallback(tf.keras.callbacks.Callback):
         config (dict): A configuration dictionary. Must contain the keys
             `['data']['min_delta']` and `['data']['patience']`.
     """
-    def __init__(self, config):
+    def __init__(self, min_delta,patience):
         super().__init__()
-        self.config = config
-        self.min_delta = config['data']['min_delta']
-        self.patience = config['data']['patience']
+   
+        self.min_delta = min_delta
+        self.patience = patience
         self.best_loss = float('inf')
         self.stopped_epoch = 0
         self.wait = 0

@@ -60,10 +60,9 @@ class TrainingLogger(tf.keras.callbacks.Callback):
             }
         }
     """
-    def __init__(self, config):
+    def __init__(self, batches_per_epoch):
         super().__init__()
-        self.config = config
-        self.batches_per_epoch = self.config['data']['batches_per_epoch']
+        self.batches_per_epoch = batches_per_epoch
         self.display_table = None
         self.graph_display = None
 
