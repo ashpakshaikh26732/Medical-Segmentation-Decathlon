@@ -3,14 +3,10 @@ import tensorflow as tf
 
 from tensorflow.keras import mixed_precision
 mixed_precision.set_global_policy("mixed_float16")
-# # Optional: Mount Drive
-# from google.colab import drive
-# drive.mount('/content/drive')
 
-# Add repo + Project folder to path
 repo_path = "/content/drive/MyDrive/Medical-Segmentation-Decathlon"
 sys.path.append(repo_path)
-sys.path.append(os.path.join(repo_path, "Project"))
+
 
 
 
