@@ -36,7 +36,7 @@ class Sementic_segmentation_loss(tf.keras.losses.Loss):
         self.diceLoss = diceLoss()
         self.ce =tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False , reduction='none')
 
-    def compute_per_sample(self,y_true , y_pred):
+    def call(self,y_true , y_pred):
         ce=self.ce(y_true , y_pred)
         y_true = tf.squeeze(y_true,axis =-1)
         map_tensor = tf.gather(self.weights , y_true )

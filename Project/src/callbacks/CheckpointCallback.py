@@ -76,7 +76,7 @@ class CheckpointCallback(tf.keras.callbacks.Callback):
             start_epoch = int(self.checkpoint.epoch.numpy())
             
             print(f"✅ Restored successfully. Resuming training from epoch {start_epoch + 1}.")
-            return start_epoch
+            return start_epoch 
         else:
             print("🚀 No checkpoint found. Starting training from epoch 1.")
             return 0

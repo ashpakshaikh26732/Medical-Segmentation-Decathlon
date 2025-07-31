@@ -10,7 +10,7 @@ repo_path = "/content/drive/MyDrive/Medical-Segmentation-Decathlon"
 sys.path.append(repo_path)
 
 
-from Project.models.unetpp import *
+from Project.src.models.unetpp import *
 
 class multi_layer_preceptron_part(tf.keras.layers.Layer):
     def __init__(self,d_model):
