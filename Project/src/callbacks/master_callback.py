@@ -8,7 +8,7 @@ repo_path = "/content/drive/MyDrive/Medical-Segmentation-Decathlon"
 sys.path.append(repo_path)
 
 from Project.src.callbacks.CheckpointCallback import *
-from Project.src.callbacksTrainingLogger import * 
+from Project.src.callbacks.TrainingLogger import * 
 from Project.src.callbacks.early_stoping import * 
 from Project.src.callbacks.learning_rate_sceduler import * 
 
