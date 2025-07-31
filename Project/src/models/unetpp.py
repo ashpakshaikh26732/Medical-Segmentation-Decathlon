@@ -122,8 +122,7 @@ class Decoder(tf.keras.models.Model):
 
 
     def build(self, input_shape):
-        # input_shape will be a tuple like ((B,D1,H1,W1,C1), …, (B,D5,H5,W5,C5))
-        # We don’t need to manually build sublayers here—just tell Keras “I’m built”
+
         super().build(input_shape)
 
     def call (self, convs ): 

@@ -229,9 +229,5 @@ class SwimUnet(tf.keras.models.Model):
         x=self.decoder(skip)
         return x
 
-model = SwimUnet(num_classes=4)
-input_tensor = tf.random.normal((1, 128, 128, 128, 1))
-output = model(input_tensor)
 
-print(output.shape)
 
