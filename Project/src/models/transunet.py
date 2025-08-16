@@ -72,12 +72,12 @@ class Transformer_part(tf.keras.layers.Layer):
 
 class Decoder(tf.keras.models.Model):
     def __init__(self) :
-        super().__init__()
+        super().__init__( num_classes)
         self.Transformer = Transformer_part()
         self.Decoder_Block1 = Decoder_Block(256 , "decoder_block_256")
         self.Decoder_Block2 =Decoder_Block(128,'decoder_block_128')
         self.Decoder_Block3 = Decoder_Block(64 , "decoder_block_64")
-        self.output_conv = tf.keras.layers.Conv3D(filters=4 ,kernel_size=(1,1,1), padding='same' , activation='softmax', name='output_head')
+        self.output_conv = tf.keras.layers.Conv3D(filters=num_classes ,kernel_size=(1,1,1), padding='same' , activation='softmax', name='output_head')
 
     def call(self, convs ) :
         f1,f2,f3,f4=convs
@@ -88,10 +88,10 @@ class Decoder(tf.keras.models.Model):
         x = self.output_conv(x)
         return x
 class TRANSUNET(tf.keras.models.Model):
-    def __init__(self) :
+    def __init__(self , num_classes) :
         super().__init__()
         self.encoder =encoder()
-        self.decoder = Decoder()
+        self.decoder = Decoder(num_classes)
     def call(self, inputs) :
         convs , pools=self.encoder(inputs)
         x=self.decoder(convs)

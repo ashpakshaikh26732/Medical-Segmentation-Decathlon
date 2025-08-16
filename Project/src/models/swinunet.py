@@ -177,7 +177,7 @@ class Encoder(tf.keras.Model):
 
 
 class Decoder(tf.keras.models.Model):
-    def __init__(self, emb_dims=[96, 192, 384, 768], window_shape=(4, 4, 4), num_heads=16, num_classes=4):
+    def __init__(self, emb_dims=[96, 192, 384, 768], window_shape=(4, 4, 4), num_heads=16, num_classes):
         super().__init__()
 
         self.patch_expand1 = PatchExpanding(input_dim=emb_dims[3], expand_dim=emb_dims[2])
@@ -218,7 +218,7 @@ class Decoder(tf.keras.models.Model):
         return x
 
 class SwimUnet(tf.keras.models.Model):
-    def __init__(self, num_classes=4, emb_dims=[96, 192, 384, 768], window_shape=(4, 4, 4), num_heads=16) :
+    def __init__(self, num_classes, emb_dims=[96, 192, 384, 768], window_shape=(4, 4, 4), num_heads=16) :
         super().__init__()
 
         self.encoder = Encoder(emb_dims=emb_dims, window_shape=window_shape, num_heads=num_heads)

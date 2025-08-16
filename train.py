@@ -105,10 +105,10 @@ loss_registry = {
 'deep_supervision_loss' : DeepSupervisionLoss3D
 }
 
-download_and_extract(config['data']['dataset_url'], output_dir="/content/", tarfile_name=config['data']['tarfile_name'])
+download_and_extract(config['data']['dataset_url'], output_dir="/kaggle/working/", tarfile_name=config['data']['tarfile_name'])
 task_name = os.path.splitext(config['data']['tarfile_name'])[0]
-image_address  = os.path.join('/content', task_name , 'imagesTr')
-label_address = os.path.join('/content',task_name , 'labelsTr')
+image_address  = os.path.join('/kaggle/working', task_name , 'imagesTr')
+label_address = os.path.join('/kaggle/working',task_name , 'labelsTr')
 dataPipeline= DataPipeline(config , image_address , label_address)
 train_dataset , val_dataset = dataPipeline.load_for_preprocessing()
 train_dataset = strategy.experimental_distribute_dataset(train_dataset)

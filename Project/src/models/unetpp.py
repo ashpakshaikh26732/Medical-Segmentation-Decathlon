@@ -89,7 +89,7 @@ class Decoder_Block(tf.keras.layers.Layer):
         c = self.conv_layer(c)
         return c
 class Decoder(tf.keras.models.Model): 
-    def __init__(self): 
+    def __init__(self , num_classes): 
         super().__init__() 
 
         self.decoder_block_01 = Decoder_Block(64 , 'Decoder_01')
@@ -110,13 +110,13 @@ class Decoder(tf.keras.models.Model):
         self.concat_13 = tf.keras.layers.Concatenate() 
         self.concat_22 = tf.keras.layers.Concatenate() 
 
-        self.output_o1 = tf.keras.layers.Conv3D(4, (1,1,1), padding='same',
+        self.output_o1 = tf.keras.layers.Conv3D(num_classes, (1,1,1), padding='same',
             name="output_head_1", activation="softmax")
-        self.output_o2 = tf.keras.layers.Conv3D(4, (1,1,1), padding='same',
+        self.output_o2 = tf.keras.layers.Conv3D(num_classes, (1,1,1), padding='same',
             name="output_head_2", activation="softmax")
-        self.output_o3 = tf.keras.layers.Conv3D(4, (1,1,1), padding='same',
+        self.output_o3 = tf.keras.layers.Conv3D(num_classes, (1,1,1), padding='same',
             name="output_head_3", activation="softmax")
-        self.output_o4 = tf.keras.layers.Conv3D(4, (1,1,1), padding='same',
+        self.output_o4 = tf.keras.layers.Conv3D(num_classes, (1,1,1), padding='same',
             name="output_head_4", activation="softmax")
     
 
@@ -161,11 +161,11 @@ class Decoder(tf.keras.models.Model):
 
 
 class UNET_PLUS_PLUS(tf.keras.models.Model): 
-    def __init__(self): 
+    def __init__(self , num_classes): 
         super().__init__()
         self.encoder  = encoder()
         self.bottleneck = BottleNeck() 
-        self.decoder = Decoder() 
+        self.decoder = Decoder( num_classes) 
 
     def  call(self, inputs ): 
         convs , pools =self.encoder(inputs)
