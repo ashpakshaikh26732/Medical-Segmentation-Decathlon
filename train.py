@@ -45,8 +45,7 @@ Workflow:
 import sys, os
 import tensorflow as tf
 
-!pip install -q monai
-from monai.apps import download_and_extract
+
 
 from tensorflow.keras import mixed_precision
 mixed_precision.set_global_policy("mixed_float16")
@@ -71,6 +70,34 @@ import matplotlib.pyplot as plt
 import os
 import argparse
 import yaml
+import requests
+import tarfile
+
+def download_and_extract(url, output_dir=".", tarfile_name="dataset.tar"):
+    """Downloads and extracts a TAR file without using MONAI."""
+    tar_path = os.path.join(output_dir, tarfile_name)
+    
+    print(f"Downloading dataset from {url}...")
+    response = requests.get(url, stream=True)
+    response.raise_for_status()
+    
+    total_size = int(response.headers.get('content-length', 0))
+    with open(tar_path, 'wb') as f, tqdm(
+        desc=tarfile_name,
+        total=total_size,
+        unit='iB',
+        unit_scale=True,
+        unit_divisor=1024,
+    ) as bar:
+        for chunk in response.iter_content(chunk_size=8192):
+            size = f.write(chunk)
+            bar.update(size)
+            
+    print(f"\nExtracting {tarfile_name}...")
+    with tarfile.open(tar_path) as tar:
+        tar.extractall(path=output_dir)
+    print("Extraction complete.")
+    os.remove(tar_path) 
 
 parser = argparse.ArgumentParser(description='Deep learning Training Script')
 parser.add_argument('--config',type=str , required=True , help='path to yaml file')
@@ -82,14 +109,14 @@ with open(args.config ,'r') as f :
 try:
 
     tpu = tf.distribute.cluster_resolver.TPUClusterResolver(tpu='local')
-
+    
 
     tf.config.experimental_connect_to_cluster(tpu)
     tf.tpu.experimental.initialize_tpu_system(tpu)
-
+    
 
     strategy = tf.distribute.TPUStrategy(tpu)
-
+    
     print("✅ TPU is running on:", tpu.master())
 
 except ValueError as e:

@@ -82,7 +82,28 @@ class Decoder_Block(tf.keras.layers.Layer):
 
  
         if u.shape[1:4] != conv.shape[1:4]:
-            u = tf.image.resize(u, size=[conv.shape[1], conv.shape[2], conv.shape[3]], method='trilinear')
+
+            u_shape = tf.shape(u)
+            conv_shape = tf.shape(conv)
+
+            target_h, target_w, target_d = conv_shape[1], conv_shape[2], conv_shape[3]
+
+            u_reshaped = tf.transpose(u, perm=[0, 3, 1, 2, 4])
+            u_reshaped = tf.reshape(u_reshaped, (u_shape[0] * u_shape[3], u_shape[1], u_shape[2], u_shape[4]))
+
+
+            u_resized_2d = tf.image.resize(u_reshaped, size=(target_h, target_w), method='trilinear')
+
+            u_resized_5d = tf.reshape(u_resized_2d, (u_shape[0], u_shape[3], target_h, target_w, u_shape[4]))
+            u = tf.transpose(u_resized_5d, perm=[0, 2, 3, 1, 4])
+
+            u_reshaped_for_depth = tf.transpose(u, perm=[0, 1, 3, 2, 4])
+            u_reshaped_for_depth = tf.reshape(u_reshaped_for_depth, (u_shape[0] * target_h, u_shape[3], target_w, u_shape[4]))
+
+            u_resized_depth = tf.image.resize(u_reshaped_for_depth, size=(target_d, target_w), method='trilinear')
+
+            u_final_shape = tf.reshape(u_resized_depth, (u_shape[0], target_h, target_d, target_w, u_shape[4]))
+            u = tf.transpose(u_final_shape, perm=[0, 1, 3, 2, 4])
         
         c = self.concat([u, conv])
         c = self.dropout(c)
