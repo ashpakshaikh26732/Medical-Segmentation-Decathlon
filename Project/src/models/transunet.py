@@ -77,7 +77,7 @@ class Decoder(tf.keras.models.Model):
         self.Decoder_Block1 = Decoder_Block(256 , "decoder_block_256")
         self.Decoder_Block2 =Decoder_Block(128,'decoder_block_128')
         self.Decoder_Block3 = Decoder_Block(64 , "decoder_block_64")
-        self.output_conv = tf.keras.layers.Conv3D(filters=num_classes ,kernel_size=(1,1,1), padding='same' , activation='softmax', name='output_head')
+        self.output_conv = tf.keras.layers.Conv3D(filters=num_classes ,kernel_size=(1,1,1), padding='same' , name='output_head')
 
     def call(self, convs ) :
         f1,f2,f3,f4=convs

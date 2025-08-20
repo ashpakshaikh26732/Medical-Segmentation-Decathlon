@@ -189,7 +189,7 @@ class Decoder(tf.keras.models.Model):
         self.patch_expand3 = PatchExpanding(input_dim=emb_dims[1], expand_dim=emb_dims[0])
         self.Decoder_stage1 = SwinTransformerBlock(dim=emb_dims[0], window_shape=window_shape, num_heads=num_heads)
 
-        self.output_head = tf.keras.layers.Conv3D(filters=num_classes, kernel_size=(1, 1, 1), activation='softmax', padding='same', dtype='float32')
+        self.output_head = tf.keras.layers.Conv3D(filters=num_classes, kernel_size=(1, 1, 1), padding='same', dtype='float32')
         self.final_upsample = PatchExpanding(input_dim=emb_dims[0], expand_dim=emb_dims[0])
         self.final_expand2 = PatchExpanding(input_dim=emb_dims[0], expand_dim=emb_dims[0])
 

@@ -132,13 +132,13 @@ class Decoder(tf.keras.models.Model):
         self.concat_22 = tf.keras.layers.Concatenate() 
 
         self.output_o1 = tf.keras.layers.Conv3D(num_classes, (1,1,1), padding='same',
-            name="output_head_1", activation="softmax")
+            name="output_head_1")
         self.output_o2 = tf.keras.layers.Conv3D(num_classes, (1,1,1), padding='same',
-            name="output_head_2", activation="softmax")
+            name="output_head_2")
         self.output_o3 = tf.keras.layers.Conv3D(num_classes, (1,1,1), padding='same',
-            name="output_head_3", activation="softmax")
+            name="output_head_3")
         self.output_o4 = tf.keras.layers.Conv3D(num_classes, (1,1,1), padding='same',
-            name="output_head_4", activation="softmax")
+            name="output_head_4")
     
 
 
