@@ -49,6 +49,10 @@ class LearningRateScheduler(tf.keras.callbacks.Callback):
             logs (dict): Optional dict of logs. Not used in this implementation.
         """
         global_step = tf.cast(global_step, dtype=tf.float32)
+        target_lr_float = tf.cast(self.target_lr, dtype=tf.float32)
+        global_step_float = tf.cast(global_step, dtype=tf.float32)
+        warmup_steps_float = tf.cast(self.warmup_steps, dtype=tf.float32)
+        total_steps_float = tf.cast(self.total_steps, dtype=tf.float32)
         
         if global_step < self.warmup_steps:
 
@@ -58,4 +62,4 @@ class LearningRateScheduler(tf.keras.callbacks.Callback):
             lr = self.target_lr * 0.5 * (1 + tf.cos(self.pi * ((global_step - self.warmup_steps) / (self.total_steps - self.warmup_steps))))
 
 
-        tf.keras.backend.set_value(self.optimizer.learning_rate, lr)
+        self.optimizer.learning_rate.assign(lr)

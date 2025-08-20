@@ -34,13 +34,13 @@ class CheckpointCallback(tf.keras.callbacks.Callback):
         super().__init__()
 
         self.checkpoint_dir = checkpoint_dir
-        self.model = model
+        self._model = model
         self.optimizer = optimizer
 
         os.makedirs(self.checkpoint_dir, exist_ok=True)
 
         self.checkpoint = tf.train.Checkpoint(
-            model=self.model,
+            model=self._model,
             optimizer=self.optimizer,
             epoch=tf.Variable(0, dtype=tf.int32)
         )
@@ -55,7 +55,7 @@ class CheckpointCallback(tf.keras.callbacks.Callback):
         """Initializes optimizer state variables for correct checkpoint restoration."""
         strategy = tf.distribute.get_strategy()
         with strategy.scope():
-            self.optimizer.build(self.model.trainable_variables)
+            self.optimizer.build(self._model.trainable_variables)
 
     def on_epoch_end(self, epoch, logs=None):
         """Saves a checkpoint at the end of an epoch."""

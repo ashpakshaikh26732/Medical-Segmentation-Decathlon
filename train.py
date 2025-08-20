@@ -152,7 +152,7 @@ with strategy.scope() :
         loss_fn = loss_registry[config['loss']]()
     model(sample_input)
     print("Model built:", model.built)
-    optimizer = tf.keras.optimizers.AdamW(learning_rate=config['optimizer']['starting_lr'],weight_decay=config['optimizer']['weight_decay'])
+    optimizer = tf.keras.optimizers.AdamW(learning_rate=float(config['optimizer']['starting_lr']),weight_decay=float(config['optimizer']['weight_decay']))
     per_class_iou = PerClassIoU(config['data']['num_classes'])
     per_class_dice = PerClassDice(config['data']['num_classes'])
     per_class_iou_val = PerClassIoU(config['data']['num_classes'])

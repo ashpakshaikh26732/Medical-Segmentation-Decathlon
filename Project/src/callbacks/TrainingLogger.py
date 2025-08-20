@@ -76,7 +76,7 @@ class TrainingLogger(tf.keras.callbacks.Callback):
         self.batch_per_class_dice = []
         self.epoch_table_data = []
         display(HTML('<h3>📊 Batch-wise Metrics</h3>'))
-        # Initialize display for batch table
+ 
         self.display_table = display(pd.DataFrame(self.batch_table_data), display_id=True)
 
 
@@ -102,8 +102,13 @@ class TrainingLogger(tf.keras.callbacks.Callback):
         
         self.batch_table_data.append(batch_dict)
         df = pd.DataFrame(self.batch_table_data)
-        
-        self.display_table.update(df)
+
+        if self.display_table is None : 
+            display(HTML('📉 Loss Graphs (Batch-wise Trend)'))
+            self.display_table = display(df , display_id=True)
+        else :  
+            self.display_table.update(df)
+
 
         self.batch_loss.append(data['loss'])
         self.batch_per_class_iou.append(list(per_class_iou.values()))
