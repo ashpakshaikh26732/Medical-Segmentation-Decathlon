@@ -48,7 +48,10 @@ import tensorflow as tf
 
 
 from tensorflow.keras import mixed_precision
-mixed_precision.set_global_policy("mixed_float16")
+#policy_config = 'mixed_bfloat16'
+#policy = tf.keras.mixed_precision.Policy(policy_config)
+#tf.keras.mixed_precision.set_global_policy(policy)
+mixed_precision.set_global_policy("mixed_bfloat16") 
 
 repo_path = "/content/drive/MyDrive/Medical-Segmentation-Decathlon"
 sys.path.append(repo_path)
@@ -72,15 +75,22 @@ import argparse
 import yaml
 import requests
 import tarfile
+from tqdm import tqdm
+
+
+
+pd.set_option('display.max_rows', 500)
+pd.set_option('display.max_columns', 50)
+pd.set_option('display.width', 1000)
 
 def download_and_extract(url, output_dir=".", tarfile_name="dataset.tar"):
     """Downloads and extracts a TAR file without using MONAI."""
     tar_path = os.path.join(output_dir, tarfile_name)
-    
+
     print(f"Downloading dataset from {url}...")
     response = requests.get(url, stream=True)
     response.raise_for_status()
-    
+
     total_size = int(response.headers.get('content-length', 0))
     with open(tar_path, 'wb') as f, tqdm(
         desc=tarfile_name,
@@ -92,12 +102,12 @@ def download_and_extract(url, output_dir=".", tarfile_name="dataset.tar"):
         for chunk in response.iter_content(chunk_size=8192):
             size = f.write(chunk)
             bar.update(size)
-            
+
     print(f"\nExtracting {tarfile_name}...")
     with tarfile.open(tar_path) as tar:
         tar.extractall(path=output_dir)
     print("Extraction complete.")
-    os.remove(tar_path) 
+    os.remove(tar_path)
 
 parser = argparse.ArgumentParser(description='Deep learning Training Script')
 parser.add_argument('--config',type=str , required=True , help='path to yaml file')
@@ -109,14 +119,14 @@ with open(args.config ,'r') as f :
 try:
 
     tpu = tf.distribute.cluster_resolver.TPUClusterResolver(tpu='local')
-    
+
 
     tf.config.experimental_connect_to_cluster(tpu)
     tf.tpu.experimental.initialize_tpu_system(tpu)
-    
+
 
     strategy = tf.distribute.TPUStrategy(tpu)
-    
+
     print("✅ TPU is running on:", tpu.master())
 
 except ValueError as e:
@@ -144,8 +154,9 @@ val_dataset = strategy.experimental_distribute_dataset(val_dataset)
 
 
 with strategy.scope() :
-    model = model_registry[config['model']['name']]()
+    model = model_registry[config['model']['name']](config['data']['num_classes'])
     sample_input = tf.random.uniform(shape=tuple(config['data']['patch_shape']))
+    sample_input = tf.expand_dims(sample_input , axis = 0)
     if config['model']['name'] =='unet_plus_plus':
         loss_fn  = loss_registry[config['loss']](config['data']['class_weights'])
     else :
@@ -153,6 +164,7 @@ with strategy.scope() :
     model(sample_input)
     print("Model built:", model.built)
     optimizer = tf.keras.optimizers.AdamW(learning_rate=float(config['optimizer']['starting_lr']),weight_decay=float(config['optimizer']['weight_decay']))
+    #optimizer = mixed_precision.LossScaleOptimizer(optimizer)
     per_class_iou = PerClassIoU(config['data']['num_classes'])
     per_class_dice = PerClassDice(config['data']['num_classes'])
     per_class_iou_val = PerClassIoU(config['data']['num_classes'])
@@ -167,16 +179,31 @@ with strategy.scope():
         if config['model']['name'] == 'unet_plus_plus':
             with tf.GradientTape() as tape :
                 model_output=model(x_train)
-                per_example_loss = loss_fn(y_train , model_output)
-                model_logits = model_output[-1]
+                clipped_outputs = [tf.clip_by_value(output, -15.0, 15.0) for output in model_output]
+                per_example_loss = loss_fn(y_train , clipped_outputs)
+                
+
+                
+                model_logits = clipped_outputs[-1]
+                
                 loss =  tf.nn.compute_average_loss(per_example_loss=per_example_loss , global_batch_size=dataPipeline.final_batch_size)
+                
+                
+                #scaled_loss = optimizer.scale_loss(loss)
         else :
             with tf.GradientTape() as tape :
                 model_logits = model(x_train)
+                model_logits = tf.clip_by_value(model_logits, -15.0, 15.0)
                 per_example_loss = loss_fn(y_train , model_logits)
                 loss = tf.nn.compute_average_loss(per_example_loss=per_example_loss , global_batch_size=dataPipeline.final_batch_size)
-
+                #scaled_loss = optimizer.scale_loss(loss)
+        
         gradients = tape.gradient(loss , model.trainable_variables)
+        
+        
+        #gradients = optimizer.get_unscaled_gradients(scaled_gradients)
+        gradients, _ = tf.clip_by_global_norm(gradients, clip_norm=1.0)
+
         optimizer.apply_gradients(zip(gradients , model.trainable_variables))
 
         per_class_iou.update_state(y_true = y_train , y_pred = model_logits )
@@ -214,9 +241,20 @@ with strategy.scope():
     def train_model_for_one_epoch (epoch , global_step):
         losses = []
         step = 1
+        nan_detected = False
         for batch in train_dataset :
             master_callback.on_batch_begain(global_step[0])
             loss = distributed_train_step(batch)
+            
+            #added for nan 
+            
+            if np.isnan((loss.numpy())):
+                print(f"\n🛑 FATAL ERROR: NaN loss detected at epoch {epoch + 1}, step {global_step}. Stopping training.")
+                nan_detected = True
+                break
+            
+            #added for nan 
+            
             losses.append(loss)
             iou_dict = {}
             dice_dict = {}
@@ -236,12 +274,23 @@ with strategy.scope():
             global_step[0]+=1
             step+=1
             master_callback.on_batch_end(step , epoch , data)
-        return losses
+        return losses , nan_detected 
 
     def val_model_for_one_epoch():
         val_losses = []
+        nan_detected = False
         for batch in val_dataset:
             val_loss  = distribute_val_step(batch)
+            
+            #added for nan 
+            
+            if np.isnan((val_loss.numpy())):
+                print(f"\n🛑 FATAL ERROR: NaN loss detected at epoch {epoch + 1}")
+                nan_detected = True
+                break
+            
+            #added for nan 
+                
             val_losses.append(val_loss)
         return val_losses
 
@@ -250,7 +299,14 @@ with strategy.scope():
     global_step = [start*config['checkpoint']['batches_per_epoch']+1]
     for epoch in range(start ,  config['checkpoint']['total_epoch']):
         master_callback.on_epoch_begain(epoch)
-        losses = train_model_for_one_epoch(epoch , global_step)
+        losses,nan_detected = train_model_for_one_epoch(epoch , global_step)
+        
+        #added now for nan 
+        if nan_detected : 
+            stop_training = True
+            break
+        #added for nan 
+        
         val_losses = val_model_for_one_epoch()
         avg_loss = tf.reduce_mean(losses)
         avg_val_loss  = tf.reduce_mean(val_losses)
@@ -285,3 +341,8 @@ with strategy.scope():
         stop_training = master_callback.on_epoch_end(epoch , data)
         if stop_training :
             break
+
+
+
+
+
