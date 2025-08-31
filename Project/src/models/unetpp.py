@@ -2,7 +2,7 @@ import sys, os
 import tensorflow as tf 
 
 from tensorflow.keras import mixed_precision
-mixed_precision.set_global_policy("mixed_float16")
+mixed_precision.set_global_policy("mixed_bfloat16")
 
 repo_path = "/content/drive/MyDrive/Medical-Segmentation-Decathlon"
 sys.path.append(repo_path)
@@ -20,7 +20,7 @@ class convolutional_Block(tf.keras.layers.Layer):
             self.conv_layers.append(tf.keras.Sequential([
                 tf.keras.layers.Conv3D(filters=n_filters, kernel_size=kernel_size, padding='same',
                                     activation=None, name=f'conv_{safe_name}_{i}'),
-                tf.keras.layers.BatchNormalization(name=f'bn_{safe_name}_{i}'),
+                tf.keras.layers.LayerNormalization(name=f'bn_{safe_name}_{i}'),
                 tf.keras.layers.Activation(activation, name=f'act_{safe_name}_{i}')
             ]))
 
@@ -92,7 +92,7 @@ class Decoder_Block(tf.keras.layers.Layer):
             u_reshaped = tf.reshape(u_reshaped, (u_shape[0] * u_shape[3], u_shape[1], u_shape[2], u_shape[4]))
 
 
-            u_resized_2d = tf.image.resize(u_reshaped, size=(target_h, target_w), method='trilinear')
+            u_resized_2d = tf.image.resize(u_reshaped, size=(target_h, target_w), method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
 
             u_resized_5d = tf.reshape(u_resized_2d, (u_shape[0], u_shape[3], target_h, target_w, u_shape[4]))
             u = tf.transpose(u_resized_5d, perm=[0, 2, 3, 1, 4])
@@ -100,7 +100,7 @@ class Decoder_Block(tf.keras.layers.Layer):
             u_reshaped_for_depth = tf.transpose(u, perm=[0, 1, 3, 2, 4])
             u_reshaped_for_depth = tf.reshape(u_reshaped_for_depth, (u_shape[0] * target_h, u_shape[3], target_w, u_shape[4]))
 
-            u_resized_depth = tf.image.resize(u_reshaped_for_depth, size=(target_d, target_w), method='trilinear')
+            u_resized_depth = tf.image.resize(u_reshaped_for_depth, size=(target_d, target_w), method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
 
             u_final_shape = tf.reshape(u_resized_depth, (u_shape[0], target_h, target_d, target_w, u_shape[4]))
             u = tf.transpose(u_final_shape, perm=[0, 1, 3, 2, 4])
@@ -132,13 +132,13 @@ class Decoder(tf.keras.models.Model):
         self.concat_22 = tf.keras.layers.Concatenate() 
 
         self.output_o1 = tf.keras.layers.Conv3D(num_classes, (1,1,1), padding='same',
-            name="output_head_1")
+            name="output_head_1",dtype ='float32')
         self.output_o2 = tf.keras.layers.Conv3D(num_classes, (1,1,1), padding='same',
-            name="output_head_2")
+            name="output_head_2",dtype ='float32')
         self.output_o3 = tf.keras.layers.Conv3D(num_classes, (1,1,1), padding='same',
-            name="output_head_3")
+            name="output_head_3" , dtype = 'float32')
         self.output_o4 = tf.keras.layers.Conv3D(num_classes, (1,1,1), padding='same',
-            name="output_head_4")
+            name="output_head_4",dtype ='float32')
     
 
 

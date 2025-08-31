@@ -9,7 +9,7 @@ data :
     val_count : 24 
     train_count : 460
     num_classes : 4
-    batch : 4
+    batch : 1
     num_replicas : 8 
     image_shape : [240,240,155,4] 
     label_shape : [240,240,155,1]
@@ -21,18 +21,20 @@ data :
     class_weights : [1.0, 135.77891991613737, 489.1624819462532, 435.4428642924422]
 checkpoint : 
     checkpoint_dir : 'gs://medical_segmentation_decathlon/task01/unet_pp/checkpoints'
-    total_step : 38800
+    total_step : 155200
     warmup_step : 10 
     target_lr : 1e-5 
     min_delta : 1e-4 
     patiance : 15 
-    batches_per_epoch : 388
+    batches_per_epoch : 1552
     total_epoch : 100 
     log_dir : 'gs://medical_segmentation_decathlon/task01/unet_pp/logs'
     
 optimizer : 
-    starting_lr : 1e-5 
+    starting_lr : 1e-5
     weight_decay : 1e-5 
     
 loss : 'deep_supervision_loss'
     
+debugger : 
+    debugger : 'gs://medical_segmentation_decathlon/task01/unet_pp/debugger'

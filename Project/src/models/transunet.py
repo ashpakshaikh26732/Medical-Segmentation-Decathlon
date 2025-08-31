@@ -71,8 +71,8 @@ class Transformer_part(tf.keras.layers.Layer):
         return x
 
 class Decoder(tf.keras.models.Model):
-    def __init__(self) :
-        super().__init__( num_classes)
+    def __init__(self , num_classes) :
+        super().__init__( )
         self.Transformer = Transformer_part()
         self.Decoder_Block1 = Decoder_Block(256 , "decoder_block_256")
         self.Decoder_Block2 =Decoder_Block(128,'decoder_block_128')

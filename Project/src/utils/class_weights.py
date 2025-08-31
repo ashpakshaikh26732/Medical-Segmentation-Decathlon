@@ -3,18 +3,18 @@ import nibabel as nib
 import os
 import tensorflow as tf
 from tqdm.notebook import tqdm
-
 import sys
 
-from tensorflow.keras import mixed_precision
-mixed_precision.set_global_policy("mixed_float16")
-
+# This assumes your other project files are accessible via this path
 repo_path = "/content/drive/MyDrive/Medical-Segmentation-Decathlon"
 sys.path.append(repo_path)
+# You may need to import your DataPipeline class here if it's in a separate file
+# from Project.src.data.pipeline import DataPipeline
 
 def calculate_class_weights(label_files):
     """
     Calculates class weights based on voxel frequency in a list of NIfTI label files.
+    This version correctly handles all 4 classes in the BraTS dataset.
     """
     total_counts = {}
     total_voxels = 0
@@ -32,9 +32,9 @@ def calculate_class_weights(label_files):
             total_counts[cls] = total_counts.get(cls, 0) + count
         total_voxels += label_data.size
 
-    # Remove label 3 if it exists, as it's not used in BraTS
-    if 3 in total_counts:
-        del total_counts[3]
+    # --- THIS IS THE FIX ---
+    # The incorrect code that deleted class 3 has been removed.
+    # --- END FIX ---
 
     sorted_counts = {k: total_counts[k] for k in sorted(total_counts.keys())}
     num_classes = len(sorted_counts)
@@ -47,11 +47,20 @@ def calculate_class_weights(label_files):
     # Second pass: Calculate weights using inverse frequency
     weights = {}
     for cls, count in sorted_counts.items():
-        weight = total_voxels / (num_classes * count)
-        weights[cls] = weight
+        # Avoid division by zero for classes that might not appear in a subset of files
+        if count == 0:
+            weights[cls] = 0
+        else:
+            weight = total_voxels / (num_classes * count)
+            weights[cls] = weight
 
-    # Normalize weights so the smallest weight is 1.0
-    min_weight = min(weights.values())
+    # Normalize weights so the smallest non-zero weight is 1.0
+    non_zero_weights = [w for w in weights.values() if w > 0]
+    if not non_zero_weights:
+         # Handle case where all weights are zero, though unlikely
+        return {cls: 1.0 for cls in sorted_counts.keys()}
+
+    min_weight = min(non_zero_weights)
     normalized_weights = {cls: weight / min_weight for cls, weight in weights.items()}
 
     print("\n--- Calculated Weights ---")
@@ -65,30 +74,28 @@ def calculate_class_weights(label_files):
 
     return normalized_weights
 
-# --- Main Execution (Corrected for your folder structure) ---
-
-# --- Main Execution (Modified to filter hidden files) ---
+# --- Main Execution ---
+# NOTE: This part assumes it can access your DataPipeline class.
+# If you run this script standalone, you may need to adjust the imports and paths.
 
 # 1. Set the correct paths to your dataset folders
-image_address = '/content/Task01_BrainTumour/imagesTr'
-label_address = '/content/Task01_BrainTumour/labelsTr'
+label_address = '/kaggle/working/Task01_BrainTumour/labelsTr'
 
-# 2. Instantiate the DataPipeline
-pipeline = DataPipeline(image_address=image_address, label_address=label_address)
-
-# 3. Get the list of ALL label file paths, ignoring hidden files
+# 2. Get the list of ALL label file paths
 all_label_filenames = sorted([
-    f for f in os.listdir(pipeline.label_address)
-    # FIX: Add a check to ignore files starting with '._'
+    f for f in os.listdir(label_address)
     if f.endswith(".nii.gz") and not f.startswith("._")
 ])
 
-# Construct the full path by joining the directory path and the filename
-all_label_paths = [os.path.join(pipeline.label_address, name) for name in all_label_filenames]
-
+# Construct the full path
+all_label_paths = [os.path.join(label_address, name) for name in all_label_filenames]
 
 # 4. Run the calculation
 if all_label_paths:
     calculated_weights = calculate_class_weights(all_label_paths)
+    print("\nFinal list of weights to use in your YAML file:")
+    # Print in a format ready to be copied
+    weight_list = [calculated_weights.get(i, 0.0) for i in sorted(calculated_weights.keys())]
+    print(weight_list)
 else:
     print("No label files found. Please check your path.")

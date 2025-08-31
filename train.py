@@ -115,6 +115,7 @@ args = parser.parse_args()
 
 with open(args.config ,'r') as f :
     config = yaml.safe_load(f)
+    
 
 try:
 
@@ -137,6 +138,7 @@ model_registry = {
     'swimUnet' : SwimUnet ,
     'transUnet' : TRANSUNET
 }
+
 loss_registry = {
 'sementic_segmetation_loss' : Sementic_segmentation_loss,
 'deep_supervision_loss' : DeepSupervisionLoss3D
@@ -178,13 +180,14 @@ with strategy.scope():
         x_train , y_train=dist_input
         if config['model']['name'] == 'unet_plus_plus':
             with tf.GradientTape() as tape :
-                model_output=model(x_train)
-                clipped_outputs = [tf.clip_by_value(output, -15.0, 15.0) for output in model_output]
-                per_example_loss = loss_fn(y_train , clipped_outputs)
-                
 
                 
-                model_logits = clipped_outputs[-1]
+                model_output=model(x_train)
+                #clipped_outputs = [tf.clip_by_value(output, -15.0, 15.0) for output in model_output]
+                per_example_loss = loss_fn(y_train , model_output)
+                
+
+                model_logits = model_output[-1]
                 
                 loss =  tf.nn.compute_average_loss(per_example_loss=per_example_loss , global_batch_size=dataPipeline.final_batch_size)
                 
@@ -193,7 +196,7 @@ with strategy.scope():
         else :
             with tf.GradientTape() as tape :
                 model_logits = model(x_train)
-                model_logits = tf.clip_by_value(model_logits, -15.0, 15.0)
+                #model_logits = tf.clip_by_value(model_logits, -15.0, 15.0)
                 per_example_loss = loss_fn(y_train , model_logits)
                 loss = tf.nn.compute_average_loss(per_example_loss=per_example_loss , global_batch_size=dataPipeline.final_batch_size)
                 #scaled_loss = optimizer.scale_loss(loss)
@@ -203,6 +206,10 @@ with strategy.scope():
         
         #gradients = optimizer.get_unscaled_gradients(scaled_gradients)
         gradients, _ = tf.clip_by_global_norm(gradients, clip_norm=1.0)
+        
+
+
+
 
         optimizer.apply_gradients(zip(gradients , model.trainable_variables))
 
