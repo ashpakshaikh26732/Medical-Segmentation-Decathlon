@@ -42,5 +42,5 @@ Thumbs.db
 # ❌ Avoid uploading raw datasets or NIfTI files accidentally
 *.nii
 *.nii.gz
-data/
+
 
