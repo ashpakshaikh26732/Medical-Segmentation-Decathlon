@@ -19,16 +19,16 @@ class DiceLoss3D(tf.keras.losses.Loss):
         self.smooth = smooth
 
     def call(self, y_true, y_pred):
-        # Cast all inputs to float32 for stable internal calculations
+
         y_pred = tf.cast(y_pred, tf.float32)
         y_true = tf.cast(y_true, tf.float32)
         
-        # Convert model logits to probabilities for Dice calculation
+
         probs = tf.nn.softmax(y_pred, axis=-1)
         
 
         y_true_squeezed = tf.squeeze(y_true, axis=-1)
-        # --- END FIX ---
+
 
         num_classes = tf.shape(probs)[-1]
         y_true_one_hot = tf.one_hot(tf.cast(y_true_squeezed, tf.int32), depth=num_classes, dtype=probs.dtype)
@@ -38,7 +38,7 @@ class DiceLoss3D(tf.keras.losses.Loss):
         sum_pred = tf.reduce_sum(probs, axis=[1, 2, 3])
 
         epsilon = tf.keras.backend.epsilon()
-        # Bulletproof denominator and numerator to prevent 0/0 resulting in NaN
+
         numerator = 2.0 * intersection + epsilon
         denominator = sum_true + sum_pred + epsilon
         
@@ -51,18 +51,19 @@ class DeepSupervisionLoss3D(tf.keras.losses.Loss):
     Calculates a combined loss from multiple output heads of a deeply-supervised model.
     This version is hardened to be fully graph-compatible and numerically stable.
     """
-    def __init__(self, class_weights, output_weights=None, name="DeepSupervisionLoss3D"):
+    def __init__(self, class_weights, output_weights , loss_weights, name="DeepSupervisionLoss3D"):
         super().__init__(name=name, reduction=tf.keras.losses.Reduction.NONE)
 
-        # Clip class weights to prevent gradient explosion at the source
-        self.class_weights = tf.clip_by_value(tf.constant(class_weights, dtype=tf.float32), 1.0, 50.0) 
-        self.output_weights = output_weights or [1.0]
 
+        self.output_weights = output_weights 
+        self.alpha = loss_weights[0]
+        self.beta = loss_weights[1]
+        self.class_weights = class_weights
         self.ce_loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True, reduction='none')
         self.dice_loss_fn = DiceLoss3D()
 
     def _resize_y_true_3d(self, y_true, y_pred):
-        # A robust, graph-safe resizing function that avoids complex transpositions
+
         y_true_shape = tf.shape(y_true)
         y_pred_shape = tf.shape(y_pred)
         condition = tf.reduce_all(y_true_shape[1:4] == y_pred_shape[1:4])
@@ -75,12 +76,12 @@ class DeepSupervisionLoss3D(tf.keras.losses.Loss):
             B, D, H, W, C = y_true_shape[0], y_true_shape[1], y_true_shape[2], y_true_shape[3], y_true_shape[4]
             y_true_float = tf.cast(y_true, tf.float32)
             
-            # Resize Height and Width
+
             reshaped_hw = tf.reshape(y_true_float, [B * D, H, W, C])
             resized_hw = tf.image.resize(reshaped_hw, [target_H, target_W], method='nearest')
             y_true_resized_hw = tf.reshape(resized_hw, [B, D, target_H, target_W, C])
 
-            # Resize Depth
+ 
             transposed_d = tf.transpose(y_true_resized_hw, [0, 2, 3, 1, 4])
             reshaped_d = tf.reshape(transposed_d, [B * target_H * target_W, D, C, 1])
             resized_d = tf.image.resize(reshaped_d, [target_D, C], method='nearest')
@@ -92,10 +93,9 @@ class DeepSupervisionLoss3D(tf.keras.losses.Loss):
         return tf.cond(condition, true_fn, false_fn)
 
     def call(self, y_true, y_preds):
-        # A list to collect the loss tensor from each deeply-supervised head
+
         all_level_losses = []
-        
-        # Support both single and multi-output models
+
         if not isinstance(y_preds, (list, tuple)):
             y_preds = [y_preds]
 
@@ -107,30 +107,28 @@ class DeepSupervisionLoss3D(tf.keras.losses.Loss):
             y_pred = tf.cast(y_pred , dtype = tf.float32)
             y_true = tf.cast(y_true , dtype = tf.float32)
             
-            # Cast logits to float32 for stable calculations
+    
             logits = tf.cast(y_pred, tf.float32)
             y_true_resized = self._resize_y_true_3d(y_true, logits)
             y_true_squeezed = tf.squeeze(y_true_resized, axis=-1)
 
-            # --- Cross-Entropy Component ---
+
             ce_per_voxel = self.ce_loss_fn(y_true_squeezed, logits)
             weight_map = tf.gather(self.class_weights, indices=tf.cast(y_true_squeezed, tf.int32))
             weighted_ce = ce_per_voxel * weight_map
             ce_per_sample_loss = tf.reduce_mean(weighted_ce, axis=[1, 2, 3])
             
-            # --- Dice Loss Component ---
+  
             dice_per_sample_loss = self.dice_loss_fn(y_true_resized, logits)
 
-            # Combine the two loss components for this level
-            level_loss = tf.cast(ce_per_sample_loss, tf.float32) + tf.cast(dice_per_sample_loss, tf.float32)
+        
+            level_loss = self.alpha * tf.cast(ce_per_sample_loss, tf.float32) +self.beta * tf.cast(dice_per_sample_loss, tf.float32)
             
-            # Append the weighted loss for this level to our list
+       
             all_level_losses.append(final_output_weights[i] * level_loss)
             
-        # --- FINAL FIX: Use tf.add_n to sum the losses outside the loop ---
-        # This creates a single, clear operation for the gradient tape to follow,
-        # guaranteeing that the connection is never lost.
+
         total_per_sample_loss = tf.add_n(all_level_losses)
-        # --- END FIX ---
+ 
             
         return total_per_sample_loss

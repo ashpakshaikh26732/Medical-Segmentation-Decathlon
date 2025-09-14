@@ -58,17 +58,22 @@ class master_callback(tf.keras.callbacks.Callback):
         super().__init__()
         self.writer = tf.summary.create_file_writer(config['checkpoint']['log_dir'])
         self.stop = False
-        self.checkpoint_dir = config['checkpoint']['checkpoint_dir']
+        #self.checkpoint_dir = config['checkpoint']['checkpoint_dir']
+        
+        self.local_checkpoint_dir = config['checkpoint']['local_checkpoint_dir']
+        self.gcs_checkpoint_dir = config['checkpoint']['gcs_checkpoint_dir']
+        
+        
         self._model = model
         self.config = config
         self.optimizer = optimizer
         self.target_lr = float(self.config['checkpoint']['target_lr'])
         self.warmup_step = self.config['checkpoint']['warmup_step']
-        self.min_delta  = self.config['checkpoint']['min_delta']
+        self.min_delta  = float(self.config['checkpoint']['min_delta'])
         self.patiance = self.config['checkpoint']['patiance']
         self.batches_per_epoch = self.config['checkpoint']['batches_per_epoch']
         self.total_steps = self.config['checkpoint']['total_step']
-        self.checkpoint_callback = CheckpointCallback(checkpoint_dir=self.checkpoint_dir , model=self._model , optimizer=self.optimizer)
+        self.checkpoint_callback = CheckpointCallback(local_dir=self.local_checkpoint_dir,gcs_dir=self.gcs_checkpoint_dir, model=self._model , optimizer=self.optimizer)
         self.learning_rate_schduler = LearningRateScheduler(optimizer=self.optimizer, target_lr=self.target_lr,warmup_step=self.warmup_step , total_step=self.total_steps)
         self.EarlyStoppingCallback = EarlyStoppingCallback(min_delta=self.min_delta , patience=self.patiance)
         self.TrainingLogger = TrainingLogger(batches_per_epoch=self.batches_per_epoch)

@@ -19,8 +19,14 @@ data :
     tarfile_name : "Task01_BrainTumour.tar"
     class_names : ['BackGround' , 'edema' , 'non-enhancing tumor' , 'enhancing tumour']
     class_weights : [1.0, 135.77891991613737, 489.1624819462532, 435.4428642924422]
+    output_weights : [0.125, 0.25, 0.5, 1.0]
+    loss_weights : [1.0,1.5]
 checkpoint : 
-    checkpoint_dir : 'gs://medical_segmentation_decathlon/task01/unet_pp/checkpoints'
+    #checkpoint_dir : 'gs://medical_segmentation_decathlon/task01/unet_pp/checkpoints'
+    local_checkpoint_dir: '/kaggle/working/checkpoints/unet_pp/'
+    gcs_checkpoint_dir : 'gs://medical_segmentation_decathlon/task01/unet_pp/checkpoints'
+    
+    
     total_step : 155200
     warmup_step : 10 
     target_lr : 1e-5 
@@ -31,10 +37,11 @@ checkpoint :
     log_dir : 'gs://medical_segmentation_decathlon/task01/unet_pp/logs'
     
 optimizer : 
-    starting_lr : 1e-5
+    starting_lr : 1e-4 
     weight_decay : 1e-5 
     
 loss : 'deep_supervision_loss'
-    
+
 debugger : 
     debugger : 'gs://medical_segmentation_decathlon/task01/unet_pp/debugger'
+    

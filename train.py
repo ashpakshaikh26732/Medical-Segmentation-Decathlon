@@ -160,9 +160,9 @@ with strategy.scope() :
     sample_input = tf.random.uniform(shape=tuple(config['data']['patch_shape']))
     sample_input = tf.expand_dims(sample_input , axis = 0)
     if config['model']['name'] =='unet_plus_plus':
-        loss_fn  = loss_registry[config['loss']](config['data']['class_weights'])
+        loss_fn  = loss_registry[config['loss']](config['data']['class_weights'] , config['data']['output_weights'] , config['data']['loss_weights'] )
     else :
-        loss_fn = loss_registry[config['loss']]()
+        loss_fn = loss_registry[config['loss']](config['data']['class_weights'] , config['data']['loss_weights'])
     model(sample_input)
     print("Model built:", model.built)
     optimizer = tf.keras.optimizers.AdamW(learning_rate=float(config['optimizer']['starting_lr']),weight_decay=float(config['optimizer']['weight_decay']))
