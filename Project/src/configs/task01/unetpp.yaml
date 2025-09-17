@@ -13,7 +13,17 @@ data :
     num_replicas : 8 
     image_shape : [240,240,155,4] 
     label_shape : [240,240,155,1]
-    patch_shape : [80,80,52,4] 
+    image_patch_shape : [80,80,52,4] 
+    label_patch_shape : [80,80,52,1] 
+    stage_patches_per_volume : 32 
+    stage1_fg_ratio : 0.5 
+    stage2_fg_ratio : 0.5 
+    stage3_fg_ratio : 0.5
+    stage3_hard_sample_ratio :0.25
+    stage2_intra_class_ratio : [0.128 , 0.461 , 0.411 ]
+    
+
+
     num_patches : 27 
     dataset_url : 'https://msd-for-monai.s3-us-west-2.amazonaws.com/Task01_BrainTumour.tar'
     tarfile_name : "Task01_BrainTumour.tar"
