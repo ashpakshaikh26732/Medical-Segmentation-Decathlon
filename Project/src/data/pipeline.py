@@ -1316,4 +1316,6 @@ class DataPipeline :
         val_dataset= val_dataset.batch(self.final_batch_size , drop_remainder=True)
         val_dataset = val_dataset.prefetch(buffer_size=tf.data.AUTOTUNE)
 
+        return train_dataset , val_dataset
+
         

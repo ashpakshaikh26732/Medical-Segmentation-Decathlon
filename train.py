@@ -148,10 +148,7 @@ download_and_extract(config['data']['dataset_url'], output_dir="/kaggle/working/
 task_name = os.path.splitext(config['data']['tarfile_name'])[0]
 image_address  = os.path.join('/kaggle/working', task_name , 'imagesTr')
 label_address = os.path.join('/kaggle/working',task_name , 'labelsTr')
-dataPipeline= DataPipeline(config , image_address , label_address)
-train_dataset , val_dataset = dataPipeline.load_for_preprocessing()
-train_dataset = strategy.experimental_distribute_dataset(train_dataset)
-val_dataset = strategy.experimental_distribute_dataset(val_dataset)
+
 
 
 
@@ -301,53 +298,90 @@ with strategy.scope():
             val_losses.append(val_loss)
         return val_losses
 
-    stop_training = False
-    start = master_callback.on_train_begain()
-    global_step = [start*config['checkpoint']['batches_per_epoch']+1]
-    for epoch in range(start ,  config['checkpoint']['total_epoch']):
-        master_callback.on_epoch_begain(epoch)
-        losses,nan_detected = train_model_for_one_epoch(epoch , global_step)
-        
-        #added now for nan 
-        if nan_detected : 
-            stop_training = True
-            break
-        #added for nan 
-        
-        val_losses = val_model_for_one_epoch()
-        avg_loss = tf.reduce_mean(losses)
-        avg_val_loss  = tf.reduce_mean(val_losses)
-        iou_dict = {}
-        dice_dict = {}
-        val_iou_dict = {}
-        val_dice_dict = {}
-        class_names = config['data']['class_names']
-        class_ious = per_class_iou.result()
-        class_dices = per_class_dice.result()
-        class_ious_val = per_class_iou_val.result()
-        class_dices_val = per_class_dice_val.result()
-        for i in range(len(per_class_iou.result())):
-            iou_dict[class_names[i]] =class_ious[i]
-            dice_dict[class_names[i]] = class_dices[i]
-            val_iou_dict[class_names[i]]=class_ious_val[i]
-            val_dice_dict[class_names[i]] = class_dices_val[i]
-        data = {
-            'loss' : avg_loss ,
-            'val_loss' : avg_val_loss ,
-            'metrics'  : {
-                'per_class_iou' : iou_dict ,
-                'per_class_dice': dice_dict ,
-                'per_class_iou_val' : val_iou_dict ,
-                'per_class_dice_val' : val_dice_dict
-            },
-        }
-        per_class_iou.reset_state()
-        per_class_dice.reset_state()
-        per_class_iou_val.reset_state()
-        per_class_dice_val.reset_state()
-        stop_training = master_callback.on_epoch_end(epoch , data)
-        if stop_training :
-            break
+stop_training = False
+start = master_callback.on_train_begain()
+global_step = [start*config['checkpoint']['batches_per_epoch']+1]
+
+if start < int(config['checkpoint']['stage_2_epoch']) : 
+    stage = 'stage1_foundational'
+    dataPipeline= DataPipeline(config , image_address , label_address)
+    train_dataset , val_dataset = DataPipeline.get_dataset(stage = stage)
+    train_dataset = strategy.experimental_distribute_dataset(train_dataset)
+    val_dataset = strategy.experimental_distribute_dataset(val_dataset)
+
+elif start>= int(config['checkpoint']['stage_2_epoch']) and start <=int(config['checkpoint']['stage_3_epoch']) : 
+    stage = 'stage2_refinement'
+    dataPipeline= DataPipeline(config , image_address , label_address)
+    train_dataset , val_dataset = DataPipeline.get_dataset(stage = stage)
+    train_dataset = strategy.experimental_distribute_dataset(train_dataset)
+    val_dataset = strategy.experimental_distribute_dataset(val_dataset)
+
+else : 
+    stage = 'stage3_hard_mining'
+    dataPipeline= DataPipeline(config , image_address , label_address)
+    train_dataset , val_dataset = DataPipeline.get_dataset(stage = stage)
+    train_dataset = strategy.experimental_distribute_dataset(train_dataset)
+    val_dataset = strategy.experimental_distribute_dataset(val_dataset)
+
+for epoch in range(start ,  config['checkpoint']['total_epoch']):
+
+    master_callback.on_epoch_begain(epoch)
+
+    if epoch == int(config['checkpoint']['stage_2_epoch']) : 
+        print('================================================================================')
+        print('changing stage from stage1_foundational to stage2_refinement  ')
+        print('================================================================================')
+        stage = 'stage2_refinement'
+        dataPipeline= DataPipeline(config , image_address , label_address)
+        train_dataset , val_dataset = DataPipeline.get_dataset(stage = stage)
+        train_dataset = strategy.experimental_distribute_dataset(train_dataset)
+        val_dataset = strategy.experimental_distribute_dataset(val_dataset)
+        master_callback.EarlyStoppingCallback.wait = 0
+
+
+    losses,nan_detected = train_model_for_one_epoch(epoch , global_step)
+    
+    #added now for nan 
+    if nan_detected : 
+        stop_training = True
+        break
+    #added for nan 
+    
+    val_losses = val_model_for_one_epoch()
+    avg_loss = tf.reduce_mean(losses)
+    avg_val_loss  = tf.reduce_mean(val_losses)
+    iou_dict = {}
+    dice_dict = {}
+    val_iou_dict = {}
+    val_dice_dict = {}
+    class_names = config['data']['class_names']
+    class_ious = per_class_iou.result()
+    class_dices = per_class_dice.result()
+    class_ious_val = per_class_iou_val.result()
+    class_dices_val = per_class_dice_val.result()
+    for i in range(len(per_class_iou.result())):
+        iou_dict[class_names[i]] =class_ious[i]
+        dice_dict[class_names[i]] = class_dices[i]
+        val_iou_dict[class_names[i]]=class_ious_val[i]
+        val_dice_dict[class_names[i]] = class_dices_val[i]
+    data = {
+        'loss' : avg_loss ,
+        'val_loss' : avg_val_loss ,
+        'metrics'  : {
+            'per_class_iou' : iou_dict ,
+            'per_class_dice': dice_dict ,
+            'per_class_iou_val' : val_iou_dict ,
+            'per_class_dice_val' : val_dice_dict
+        },
+    }
+    per_class_iou.reset_state()
+    per_class_dice.reset_state()
+    per_class_iou_val.reset_state()
+    per_class_dice_val.reset_state()
+    stop_training = master_callback.on_epoch_end(epoch , data)
+    if stop_training :
+        break
+
 
 
 

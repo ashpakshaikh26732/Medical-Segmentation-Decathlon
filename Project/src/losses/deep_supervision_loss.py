@@ -59,6 +59,7 @@ class DeepSupervisionLoss3D(tf.keras.losses.Loss):
         self.alpha = loss_weights[0]
         self.beta = loss_weights[1]
         self.class_weights = class_weights
+        self.class_weights = tf.clip_by_value(tf.constant(class_weights, dtype=tf.float32), 1.0, 50.0)
         self.ce_loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True, reduction='none')
         self.dice_loss_fn = DiceLoss3D()
 

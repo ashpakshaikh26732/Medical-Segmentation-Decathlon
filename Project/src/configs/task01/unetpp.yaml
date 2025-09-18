@@ -43,8 +43,10 @@ checkpoint :
     min_delta : 1e-4 
     patiance : 15 
     batches_per_epoch : 1552
-    total_epoch : 100 
+    total_epoch : 200 
     log_dir : 'gs://medical_segmentation_decathlon/task01/unet_pp/logs'
+    stage_2_epoch : 101
+    stage_3_epoch : 151
     
 optimizer : 
     starting_lr : 1e-4 
