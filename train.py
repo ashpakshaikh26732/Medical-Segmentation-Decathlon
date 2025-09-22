@@ -62,7 +62,7 @@ from Project.src.losses.deep_supervision_loss import *
 from Project.src.losses.sementic_segmentation_loss import *
 from Project.src.metrics.Per_class_dice import *
 from Project.src.metrics.per_class_iou import *
-from Project.src.models.swinunet import *
+from Project.src.models.swim_trans_unet import *
 from Project.src.models.transunet import *
 from Project.src.models.unetpp import *
 
@@ -135,7 +135,7 @@ except ValueError as e:
 
 model_registry = {
     "unet_plus_plus" :UNET_PLUS_PLUS ,
-    'swimUnet' : SwimUnet ,
+    'swin_transunet' : SwinTransUnet ,
     'transUnet' : TRANSUNET
 }
 
@@ -153,8 +153,12 @@ label_address = os.path.join('/kaggle/working',task_name , 'labelsTr')
 
 
 with strategy.scope() :
-    model = model_registry[config['model']['name']](config['data']['num_classes'])
-    sample_input = tf.random.uniform(shape=tuple(config['data']['patch_shape']))
+    if  (config['model']['name'] == 'swin_transunet') :
+        model = model_registry[config['model']['name']](config)
+    else : 
+        model = model_registry[config['model']['name']](config['data']['num_classes'])
+        
+    sample_input = tf.random.uniform(shape=tuple(config['data']['image_patch_shape']))
     sample_input = tf.expand_dims(sample_input , axis = 0)
     if config['model']['name'] =='unet_plus_plus':
         loss_fn  = loss_registry[config['loss']](config['data']['class_weights'] , config['data']['output_weights'] , config['data']['loss_weights'] )
@@ -299,27 +303,28 @@ with strategy.scope():
         return val_losses
 
 stop_training = False
-start = master_callback.on_train_begain()
+with strategy.scope():
+    start = master_callback.on_train_begain()
 global_step = [start*config['checkpoint']['batches_per_epoch']+1]
 
 if start < int(config['checkpoint']['stage_2_epoch']) : 
     stage = 'stage1_foundational'
     dataPipeline= DataPipeline(config , image_address , label_address)
-    train_dataset , val_dataset = DataPipeline.get_dataset(stage = stage)
+    train_dataset , val_dataset = dataPipeline.get_dataset(stage = stage)
     train_dataset = strategy.experimental_distribute_dataset(train_dataset)
     val_dataset = strategy.experimental_distribute_dataset(val_dataset)
 
 elif start>= int(config['checkpoint']['stage_2_epoch']) and start <=int(config['checkpoint']['stage_3_epoch']) : 
     stage = 'stage2_refinement'
     dataPipeline= DataPipeline(config , image_address , label_address)
-    train_dataset , val_dataset = DataPipeline.get_dataset(stage = stage)
+    train_dataset , val_dataset = dataPipeline.get_dataset(stage = stage)
     train_dataset = strategy.experimental_distribute_dataset(train_dataset)
     val_dataset = strategy.experimental_distribute_dataset(val_dataset)
 
 else : 
     stage = 'stage3_hard_mining'
     dataPipeline= DataPipeline(config , image_address , label_address)
-    train_dataset , val_dataset = DataPipeline.get_dataset(stage = stage)
+    train_dataset , val_dataset = dataPipeline.get_dataset(stage = stage)
     train_dataset = strategy.experimental_distribute_dataset(train_dataset)
     val_dataset = strategy.experimental_distribute_dataset(val_dataset)
 
@@ -333,7 +338,7 @@ for epoch in range(start ,  config['checkpoint']['total_epoch']):
         print('================================================================================')
         stage = 'stage2_refinement'
         dataPipeline= DataPipeline(config , image_address , label_address)
-        train_dataset , val_dataset = DataPipeline.get_dataset(stage = stage)
+        train_dataset , val_dataset = dataPipeline.get_dataset(stage = stage)
         train_dataset = strategy.experimental_distribute_dataset(train_dataset)
         val_dataset = strategy.experimental_distribute_dataset(val_dataset)
         master_callback.EarlyStoppingCallback.wait = 0

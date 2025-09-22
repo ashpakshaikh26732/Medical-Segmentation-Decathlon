@@ -390,55 +390,51 @@ class Genrator :
         label = tf.convert_to_tensor(label)
         return image , label
 
-    def resize_volume(self, image , label) :
+    def resize_volume(self, image, label):
         """
         Resizes a 3D volume to a target shape specified in the config using
-        native TensorFlow operations.
-
-        Args:
-            image (tf.Tensor): The 4D image tensor (D, H, W, C).
-            label (tf.Tensor): The 4D label tensor (D, H, W, C).
-
-        Returns:
-            Tuple[tf.Tensor, tf.Tensor]: The resized image and label tensors.
+        the modern tf.image.resize function for robust interpolation.
         """
-        h_image_orignal ,w_image_orignal , d_image_orignal , _ = image.shape
-        h_label_orignal , w_label_orignal , d_label_orignal , _ =label.shape
+        # Get target shape from config, e.g., [D, H, W, C]
+        target_image_shape = self.config['data']['image_shape']
+        target_label_shape = self.config['data']['label_shape']
 
-        image = tf.expand_dims(image , axis = 0 )
-        label  = tf.expand_dims(label , axis = 0)
-
-        h_image , w_image , d_image , c_image = self.config['data']['image_shape']
-        h_label , w_label , d_label ,c_label = self.config['data']['label_shape']
-
-        image_h_factor = h_image / h_image_orignal
-        image_w_factor = w_image / w_image_orignal
-        image_d_factor = d_image / d_image_orignal
-
-        label_h_factor =h_label / h_label_orignal
-        label_w_factor = w_label / w_label_orignal
-        label_d_factor = d_label / d_label_orignal
-
-        resized_image = tf.keras.backend.resize_volumes(
+        # --- Resize Image (using 'bilinear' interpolation) ---
+        # 1. Resize Height and Width: input shape (D, H, W, C)
+        resized_hw = tf.image.resize(
             image,
-            depth_factor=image_h_factor,
-            height_factor=image_w_factor,
-            width_factor=image_d_factor,
-            data_format="channels_last"
+            (target_image_shape[1], target_image_shape[2]),
+            method='bilinear'
         )
-
-        resized_label = tf.keras.backend.resize_volumes(
-            label ,
-            depth_factor=label_h_factor,
-            height_factor=label_w_factor,
-            width_factor=label_d_factor,
-            data_format="channels_last"
+        # 2. Transpose for depth resizing: new shape (H, W, D, C)
+        transposed = tf.transpose(resized_hw, perm=[1, 2, 0, 3])
+        # 3. Resize Depth: input shape (H, W, D, C), resizing the (W, D) plane
+        resized_d = tf.image.resize(
+            transposed,
+            (target_image_shape[2], target_image_shape[0]), # Resizing W and D dims
+            method='bilinear'
         )
+        # 4. Transpose back to original format: final shape (D, H, W, C)
+        final_image = tf.transpose(resized_d, perm=[2, 0, 1, 3])
+        final_image.set_shape(target_image_shape)
 
-        image = tf.squeeze(resized_image , axis=0)
-        label = tf.squeeze(resized_label , axis = 0)
 
-        return image , label
+        # --- Resize Label (using 'nearest' to preserve integer class IDs) ---
+        resized_hw_label = tf.image.resize(
+            label,
+            (target_label_shape[1], target_label_shape[2]),
+            method='nearest'
+        )
+        transposed_label = tf.transpose(resized_hw_label, perm=[1, 2, 0, 3])
+        resized_d_label = tf.image.resize(
+            transposed_label,
+            (target_label_shape[2], target_label_shape[0]),
+            method='nearest'
+        )
+        final_label = tf.transpose(resized_d_label, perm=[2, 0, 1, 3])
+        final_label.set_shape(target_label_shape)
+
+        return final_image, final_label
 
     def cast(self, image , label , dtype = tf.float32):
         """Casts image and label tensors to a specified data type."""
@@ -534,7 +530,7 @@ class Genrator :
 
 class PatchSampler :
     def __init__(self , config):
-        self.patch_shape = config['data']['patch_shape']
+        #self.patch_shape = config['data']['patch_shape']
         self.stage_patches_per_volume = config['data']['stage_patches_per_volume']
         self.stage1_fg_ratio = config['data']['stage1_fg_ratio']
         self.stage2_fg_ratio = config['data']['stage2_fg_ratio']
@@ -547,61 +543,117 @@ class PatchSampler :
 
         self.image_patch = list(config['data']['image_patch_shape'])
 
-        self.image_patch = list(config['data']['label_patch_shape'])
+        self.label_patch = list(config['data']['label_patch_shape'])
         self.hard_patchs = None 
-
+    
     def _extract_patches(self, volume, centers, patch_shape):
         """
-        Extracts 3D patches from a volume at specified center coordinates.
+        Extracts 3D patches from a volume at specified center coordinates using
+        the SOTA nnU-Net "intelligent slicing" approach.
 
-        This method is a fully graph-native, high-performance implementation using the
-        SOTA "slice and gather" technique with tf.gather_nd.
+        This method is a fully graph-native, high-performance implementation that
+        avoids the CPU bottleneck of tf.gather_nd by using tf.map_fn to apply
+        a robust tf.slice operation in parallel for each patch.
 
         Args:
             volume (tf.Tensor): The 4D volume to extract from (D, H, W, C).
             centers (tf.Tensor): A tensor of center coordinates of shape [num_patches, 3].
-            patch_shape (list or tuple): The spatial shape of the patches, e.g., (80, 80, 52).
+            patch_shape (list or tuple): The spatial shape of the patches, e.g., (80, 80, 52, 4).
 
         Returns:
-            tf.Tensor: A tensor of extracted patches with shape 
-                    [num_patches, patch_d, patch_h, patch_w, channels].
+            tf.Tensor: A tensor of extracted patches with shape
+                       [num_patches, patch_d, patch_h, patch_w, channels].
         """
 
-        patch_shape = tf.convert_to_tensor(patch_shape[:3], dtype=tf.int32)
-        centers = tf.cast(centers, dtype=tf.int32)
+        patch_shape_tf = tf.convert_to_tensor(patch_shape[:3], dtype=tf.int32)
 
-        half_patch = patch_shape // 2
-        corner_coordinates = centers - half_patch
+        def _slice_one_patch(center):
 
-        patch_d, patch_h, patch_w = tf.unstack(patch_shape)
+            corner_spatial = center - patch_shape_tf // 2
+
+
+            corner_spatial = tf.maximum(corner_spatial, 0)
+
+
+            begin_coord = tf.concat([corner_spatial, [0]], axis=0)
+
+
+            num_channels = tf.shape(volume)[-1]
+            size_coord = tf.concat([patch_shape_tf, [num_channels]], axis=0)
+
+
+            patch = tf.slice(volume, begin=begin_coord, size=size_coord)
+            return patch
+
+
+        output_signature = tf.TensorSpec(shape=patch_shape, dtype=volume.dtype)
+
+        all_patches = tf.map_fn(
+            fn=_slice_one_patch,
+            elems=centers,
+            fn_output_signature=output_signature
+        )
+        return all_patches
+
+
+
+
+    # def _extract_patches(self, volume, centers, patch_shape):
+    #     """
+    #     Extracts 3D patches from a volume at specified center coordinates.
+
+    #     This method is a fully graph-native, high-performance implementation using the
+    #     SOTA "slice and gather" technique with tf.gather_nd.
+
+    #     Args:
+    #         volume (tf.Tensor): The 4D volume to extract from (D, H, W, C).
+    #         centers (tf.Tensor): A tensor of center coordinates of shape [num_patches, 3].
+    #         patch_shape (list or tuple): The spatial shape of the patches, e.g., (80, 80, 52).
+
+    #     Returns:
+    #         tf.Tensor: A tensor of extracted patches with shape 
+    #                 [num_patches, patch_d, patch_h, patch_w, channels].
+    #     """
+
+    #     patch_shape = tf.convert_to_tensor(patch_shape[:3], dtype=tf.int32)
+    #     centers = tf.cast(centers, dtype=tf.int32)
+
+    #     half_patch = patch_shape // 2
+    #     corner_coordinates = centers - half_patch
+
+
+    #     zeros = tf.zeros_like(corner_coordinates)
+    #     corner_coordinates = tf.maximum(corner_coordinates, zeros)
+
+    #     patch_d, patch_h, patch_w = tf.unstack(patch_shape)
         
-        z_indices = tf.range(patch_d)
-        y_indices = tf.range(patch_h)
-        x_indices = tf.range(patch_w)
+    #     z_indices = tf.range(patch_d)
+    #     y_indices = tf.range(patch_h)
+    #     x_indices = tf.range(patch_w)
 
-        grid_z, grid_y, grid_x = tf.meshgrid(z_indices, y_indices, x_indices, indexing='ij')
+    #     grid_z, grid_y, grid_x = tf.meshgrid(z_indices, y_indices, x_indices, indexing='ij')
 
 
-        relative_patch_indices = tf.stack([grid_z, grid_y, grid_x], axis=-1)
-        relative_patch_indices = tf.reshape(relative_patch_indices, (-1, 3))
+    #     relative_patch_indices = tf.stack([grid_z, grid_y, grid_x], axis=-1)
+    #     relative_patch_indices = tf.reshape(relative_patch_indices, (-1, 3))
 
-        corner_coordinates = tf.expand_dims(corner_coordinates, axis=1)
-        relative_patch_indices = tf.expand_dims(relative_patch_indices, axis=0)
+    #     corner_coordinates = tf.expand_dims(corner_coordinates, axis=1)
+    #     relative_patch_indices = tf.expand_dims(relative_patch_indices, axis=0)
 
-        absolute_indices = corner_coordinates + relative_patch_indices
+    #     absolute_indices = corner_coordinates + relative_patch_indices
 
-        patches_volume = tf.gather_nd(volume, absolute_indices)
+    #     patches_volume = tf.gather_nd(volume, absolute_indices)
 
-        num_channels = tf.shape(volume)[-1]
-        final_shape = tf.concat([
-            [-1], 
-            patch_shape, 
-            [num_channels]
-        ], axis=0)
+    #     num_channels = tf.shape(volume)[-1]
+    #     final_shape = tf.concat([
+    #         [-1], 
+    #         patch_shape, 
+    #         [num_channels]
+    #     ], axis=0)
 
-        patches_volume = tf.reshape(patches_volume, shape=final_shape)
+    #     patches_volume = tf.reshape(patches_volume, shape=final_shape)
         
-        return patches_volume
+    #     return patches_volume
 
     def _sample_stage1_foundational(self, image, label):
         """
@@ -654,7 +706,7 @@ class PatchSampler :
 
 
         volume_shape = tf.shape(image)
-        max_d, max_h, max_w = volume_shape[0], volume_shape[1], volume_shape[2]
+        max_d, max_h, max_w = volume_shape[0] - self.image_patch[0], volume_shape[1] - self.image_patch[1], volume_shape[2]-self.image_patch[2]
 
         random_d_coords = tf.random.uniform(shape=[num_total_random_patches], minval=0, maxval=max_d, dtype=tf.int32)
         random_h_coords = tf.random.uniform(shape=[num_total_random_patches], minval=0, maxval=max_h, dtype=tf.int32)
@@ -750,7 +802,8 @@ class PatchSampler :
         num_total_random_patches = num_random_patches + (num_fg_patches - num_fg_sampled)
 
         volume_shape = tf.shape(image)
-        max_d, max_h, max_w = volume_shape[0], volume_shape[1], volume_shape[2]
+        max_d, max_h, max_w = volume_shape[0] - self.image_patch[0], volume_shape[1] - self.image_patch[1], volume_shape[2]-self.image_patch[2]
+
 
         random_d_coords = tf.random.uniform(shape=[num_total_random_patches], minval=0, maxval=max_d, dtype=tf.int32)
         random_h_coords = tf.random.uniform(shape=[num_total_random_patches], minval=0, maxval=max_h, dtype=tf.int32)
@@ -773,6 +826,8 @@ class PatchSampler :
         Public method to update the internal buffer of hard patch coordinates.
         This will be called periodically by the main training loop.
         """
+        if hard_patchs_list == None : 
+            return 
 
         self.hard_patchs = tf.convert_to_tensor(hard_patchs_list, dtype=tf.int32)
         print(f"INFO: Hard patch buffer updated with {tf.shape(self.hard_patchs)[0]} coordinates.")
@@ -801,7 +856,8 @@ class PatchSampler :
             hard_patch_coords = tf.gather(self.hard_patchs, random_indices)
 
             volume_shape = tf.shape(image)
-            max_d, max_h, max_w = tf.unstack(volume_shape[:3])
+            max_d, max_h, max_w = volume_shape[0] - self.image_patch[0], volume_shape[1] - self.image_patch[1], volume_shape[2]-self.image_patch[2]
+
 
             random_d_coords = tf.random.uniform(shape=[num_random_patches], minval=0, maxval=max_d, dtype=tf.int32)
             random_h_coords = tf.random.uniform(shape=[num_random_patches], minval=0, maxval=max_h, dtype=tf.int32)
@@ -853,137 +909,144 @@ class PatchSampler :
             return self._sample_stage1_foundational(image, label)
 
 
+
 class RandomElasticDeformation3D(tf.keras.layers.Layer):
     """
-    Applies a random 3D elastic deformation to a volume.
-    Handles both batched (5D) and unbatched (4D) inputs, and supports
-    both "DHWC" and "HWDC" data formats using only native TensorFlow operations.
+    A high-performance 3D elastic deformation layer optimized for TPUs.
+    
+    This implementation leverages bfloat16 precision to halve memory bandwidth
+    requirements and uses a fully vectorized trilinear interpolation for maximum speed.
     """
     def __init__(self,
                  grid_size=(4, 4, 4),
                  alpha=35.0,
                  sigma=2.5,
-                 data_format="DHWC",
                  **kwargs):
-        """
-        Args:
-            grid_size (tuple): The size of the coarse grid for displacements.
-            alpha (float): Scaling factor for displacement intensity.
-            sigma (float): Std deviation of the Gaussian filter for smoothing.
-            data_format (str): The format of the input data. One of "DHWC"
-                               (Depth, Height, Width, Channels) or "HWDC"
-                               (Height, Width, Depth, Channels).
-        """
         super().__init__(**kwargs)
         self.grid_size = grid_size
-        self.alpha = alpha
-        self.sigma = sigma
-        if data_format not in ["DHWC", "HWDC"]:
-            raise ValueError("`data_format` must be one of 'DHWC' or 'HWDC'")
-        self.data_format = data_format
+        self.alpha = tf.constant(alpha, dtype=tf.bfloat16)
+        self.sigma = tf.constant(sigma, dtype=tf.bfloat16)
+
+    def _separable_gaussian_filter_3d(self, tensor, sigma):
+        """Applies a fast, separable 3D Gaussian filter."""
+        kernel_size = tf.cast(2 * tf.round(3 * sigma) + 1, dtype=tf.int32)
+        ax = tf.range(-tf.cast(kernel_size // 2, tf.bfloat16) + 1.0, 
+                      tf.cast(kernel_size // 2, tf.bfloat16) + 1.0)
+        kernel_1d = tf.exp(-(ax**2) / (2.0 * sigma**2))
+        kernel_1d = kernel_1d / tf.reduce_sum(kernel_1d)
         
-    def _gaussian_kernel_3d(self, kernel_size, sigma):
-        ax = tf.range(-tf.cast(kernel_size // 2, tf.float32) + 1.0, tf.cast(kernel_size // 2, tf.float32) + 1.0)
-        xx, yy, zz = tf.meshgrid(ax, ax, ax, indexing='ij')
-        kernel = tf.exp(-(xx**2 + yy**2 + zz**2) / (2.0 * sigma**2))
-        kernel = kernel / tf.reduce_sum(kernel)
-        return kernel[:, :, :, tf.newaxis, tf.newaxis]
+        filter_d = tf.cast(tf.reshape(kernel_1d, [-1, 1, 1, 1, 1]), dtype=tensor.dtype)
+        filter_h = tf.cast(tf.reshape(kernel_1d, [1, -1, 1, 1, 1]), dtype=tensor.dtype)
+        filter_w = tf.cast(tf.reshape(kernel_1d, [1, 1, -1, 1, 1]), dtype=tensor.dtype)
 
-    def _dense_image_warp_3d(self, image, flow, interpolation):
-
-        image_shape = tf.shape(image)
-        D, H, W = image_shape[1], image_shape[2], image_shape[3]
-        grid_d, grid_h, grid_w = tf.meshgrid(
-            tf.range(D, dtype=tf.float32),
-            tf.range(H, dtype=tf.float32),
-            tf.range(W, dtype=tf.float32),
-            indexing='ij'
+        tensor = tf.nn.convolution(
+            tensor, filter_d, strides=[1, 1, 1, 1, 1], padding='SAME'
         )
-        grid = tf.stack([grid_d, grid_h, grid_w], axis=-1)
-        grid = tf.expand_dims(grid, 0)
-        warp_grid = grid + flow
-        
-        if interpolation == 'NEAREST':
-            coords = tf.round(warp_grid)
-            coords = tf.clip_by_value(coords, 0, tf.cast(tf.shape(image)[1:4] - 1, tf.float32))
-            indices = tf.cast(coords, tf.int32)
-            warped_image = tf.gather_nd(image, indices, batch_dims=1)
-        elif interpolation == 'BILINEAR':
-            floor_coords = tf.floor(warp_grid)
-            ceil_coords = floor_coords + 1
-            weight = warp_grid - floor_coords
-            floor_coords = tf.clip_by_value(floor_coords, 0, tf.cast(tf.shape(image)[1:4] - 1, tf.float32))
-            ceil_coords = tf.clip_by_value(ceil_coords, 0, tf.cast(tf.shape(image)[1:4] - 1, tf.float32))
-            floor_indices = tf.cast(floor_coords, tf.int32)
-            ceil_indices = tf.cast(ceil_coords, tf.int32)
-            
-            def gather(d, h, w):
-                _indices = tf.stack([d, h, w], axis=-1)
-                return tf.gather_nd(image, _indices, batch_dims=1)
+        tensor = tf.nn.convolution(
+            tensor, filter_h, strides=[1, 1, 1, 1, 1], padding='SAME'
+        )
+        tensor = tf.nn.convolution(
+            tensor, filter_w, strides=[1, 1, 1, 1, 1], padding='SAME'
+        )
+        return tensor
 
-            c000 = gather(floor_indices[..., 0], floor_indices[..., 1], floor_indices[..., 2])
-            c100 = gather(ceil_indices[..., 0],  floor_indices[..., 1], floor_indices[..., 2])
-            c010 = gather(floor_indices[..., 0], ceil_indices[..., 1],  floor_indices[..., 2])
-            c110 = gather(ceil_indices[..., 0],  ceil_indices[..., 1],  floor_indices[..., 2])
-            c001 = gather(floor_indices[..., 0], floor_indices[..., 1], ceil_indices[..., 2])
-            c101 = gather(ceil_indices[..., 0],  floor_indices[..., 1], ceil_indices[..., 2])
-            c011 = gather(floor_indices[..., 0], ceil_indices[..., 1],  ceil_indices[..., 2])
-            c111 = gather(ceil_indices[..., 0],  ceil_indices[..., 1],  ceil_indices[..., 2])
-            
-            wd, wh, ww = weight[..., 0:1], weight[..., 1:2], weight[..., 2:3]
-            c00 = c000 * (1 - wd) + c100 * wd; c01 = c001 * (1 - wd) + c101 * wd
-            c10 = c010 * (1 - wd) + c110 * wd; c11 = c011 * (1 - wd) + c111 * wd
-            c0 = c00 * (1 - wh) + c10 * wh;   c1 = c01 * (1 - wh) + c11 * wh
-            warped_image = c0 * (1 - ww) + c1 * ww
-        else:
-            raise ValueError("Interpolation must be 'NEAREST' or 'BILINEAR'.")
-        return warped_image
-
-    def call(self, image_volume , label_volume):
-        image_volume, label_volume
+    def call(self, image_volume, label_volume):
+        original_image_dtype = image_volume.dtype
+        image_volume = tf.cast(image_volume, dtype=tf.bfloat16)
         
         was_batched = True
-        if tf.rank(image_volume) == 4:
+        if image_volume.shape.rank == 4:
             was_batched = False
             image_volume = tf.expand_dims(image_volume, axis=0)
             label_volume = tf.expand_dims(label_volume, axis=0)
 
-        if self.data_format == "HWDC":
-            image_volume = tf.transpose(image_volume, perm=[0, 3, 1, 2, 4])
-            label_volume = tf.transpose(label_volume, perm=[0, 3, 1, 2, 4])
-            
         input_shape = tf.shape(image_volume)
-        batch_size, D, H, W = input_shape[0], input_shape[1], input_shape[2], input_shape[3]
-
-        coarse_flow = tf.random.uniform(shape=(batch_size, self.grid_size[0], self.grid_size[1], self.grid_size[2], 3), minval=-1, maxval=1)
-        flow = tf.image.resize(coarse_flow, size=(D, H, W), method='bicubic')
+        B, D, H, W = input_shape[0], input_shape[1], input_shape[2], input_shape[3]
         
+        coarse_flow = tf.random.uniform(
+            shape=(B, self.grid_size[0], self.grid_size[1], self.grid_size[2], 3),
+            minval=-1, maxval=1, dtype=tf.bfloat16)
 
-        kernel_size = tf.cast(2 * tf.round(3 * self.sigma) + 1, dtype=tf.int32)
-        kernel = self._gaussian_kernel_3d(kernel_size, self.sigma)
-        kernel = tf.cast(kernel, dtype=flow.dtype)
+        # Reshape the 5D tensor to 4D to use tf.image.resize, then reshape back.
+        flow = tf.reshape(coarse_flow, [B * self.grid_size[0], self.grid_size[1], self.grid_size[2], 3])
+        flow = tf.image.resize(flow, size=[H, W], method='bicubic')
+        flow = tf.reshape(flow, [B, self.grid_size[0], H, W, 3])
+        
+        flow = tf.transpose(flow, perm=[0, 2, 3, 1, 4])
+        flow = tf.reshape(flow, [B * H * W, self.grid_size[0], 3])
+        flow = tf.image.resize(tf.expand_dims(flow, axis=1), size=[1, D], method='bicubic')
+        flow = tf.squeeze(flow, axis=1)
+        flow = tf.reshape(flow, [B, H, W, D, 3])
+        flow = tf.transpose(flow, perm=[0, 3, 1, 2, 4])
+
+        # --- THE FIX IS HERE ---
+        # Recast flow to bfloat16, as tf.image.resize upcasts bicubic output to float32.
+        flow = tf.cast(flow, dtype=tf.bfloat16)
 
         flow_components = tf.unstack(flow, axis=-1)
         smoothed_components = []
         for component in flow_components:
-            component_reshaped = component[:, :, :, :, tf.newaxis]
-            smoothed = tf.nn.conv3d(component_reshaped, kernel, strides=[1, 1, 1, 1, 1], padding='SAME')
-            smoothed_components.append(smoothed[:, :, :, :, 0])
-        flow = tf.stack(smoothed_components, axis=-1)
+            smoothed_component = self._separable_gaussian_filter_3d(
+                component[..., tf.newaxis], self.sigma
+            )
+            smoothed_components.append(smoothed_component[..., 0])
+        smoothed_flow = tf.stack(smoothed_components, axis=-1)
         
-        flow = flow * self.alpha
+        flow = smoothed_flow * self.alpha
 
-        deformed_image = self._dense_image_warp_3d(image_volume, flow, interpolation='BILINEAR')
-        deformed_label = self._dense_image_warp_3d(label_volume, flow, interpolation='NEAREST')
-            
-        if self.data_format == "HWDC":
-            deformed_image = tf.transpose(deformed_image, perm=[0, 2, 3, 1, 4])
-            deformed_label = tf.transpose(deformed_label, perm=[0, 2, 3, 1, 4])
+        grid_d, grid_h, grid_w = tf.meshgrid(
+            tf.range(D, dtype=tf.bfloat16),
+            tf.range(H, dtype=tf.bfloat16),
+            tf.range(W, dtype=tf.bfloat16),
+            indexing='ij'
+        )
+        grid = tf.stack([grid_d, grid_h, grid_w], axis=-1)
+        warp_grid = tf.expand_dims(grid, 0) + flow
 
+        warp_grid_floor = tf.floor(warp_grid)
+        t = warp_grid - warp_grid_floor
+        
+        d0 = tf.cast(warp_grid_floor[..., 0], tf.int32)
+        h0 = tf.cast(warp_grid_floor[..., 1], tf.int32)
+        w0 = tf.cast(warp_grid_floor[..., 2], tf.int32)
+
+        d1 = tf.clip_by_value(d0 + 1, 0, D - 1)
+        h1 = tf.clip_by_value(h0 + 1, 0, H - 1)
+        w1 = tf.clip_by_value(w0 + 1, 0, W - 1)
+        d0 = tf.clip_by_value(d0, 0, D - 1)
+        h0 = tf.clip_by_value(h0, 0, H - 1)
+        w0 = tf.clip_by_value(w0, 0, W - 1)
+
+        c000 = tf.gather_nd(image_volume, tf.stack([d0, h0, w0], axis=-1), batch_dims=1)
+        c001 = tf.gather_nd(image_volume, tf.stack([d0, h0, w1], axis=-1), batch_dims=1)
+        c010 = tf.gather_nd(image_volume, tf.stack([d0, h1, w0], axis=-1), batch_dims=1)
+        c011 = tf.gather_nd(image_volume, tf.stack([d0, h1, w1], axis=-1), batch_dims=1)
+        c100 = tf.gather_nd(image_volume, tf.stack([d1, h0, w0], axis=-1), batch_dims=1)
+        c101 = tf.gather_nd(image_volume, tf.stack([d1, h0, w1], axis=-1), batch_dims=1)
+        c110 = tf.gather_nd(image_volume, tf.stack([d1, h1, w0], axis=-1), batch_dims=1)
+        c111 = tf.gather_nd(image_volume, tf.stack([d1, h1, w1], axis=-1), batch_dims=1)
+
+        td, th, tw = t[..., 0:1], t[..., 1:2], t[..., 2:3]
+        c00 = c000 * (1 - tw) + c001 * tw
+        c01 = c010 * (1 - tw) + c011 * tw
+        c10 = c100 * (1 - tw) + c101 * tw
+        c11 = c110 * (1 - tw) + c111 * tw
+        c0 = c00 * (1 - th) + c01 * th
+        c1 = c10 * (1 - th) + c11 * th
+        deformed_image = c0 * (1 - td) + c1 * td
+        
+        deformed_image = tf.cast(deformed_image, original_image_dtype)
+
+        nearest_indices_float = tf.round(warp_grid)
+        nearest_d = tf.clip_by_value(tf.cast(nearest_indices_float[..., 0], tf.int32), 0, D - 1)
+        nearest_h = tf.clip_by_value(tf.cast(nearest_indices_float[..., 1], tf.int32), 0, H - 1)
+        nearest_w = tf.clip_by_value(tf.cast(nearest_indices_float[..., 2], tf.int32), 0, W - 1)
+        deformed_label = tf.gather_nd(label_volume, tf.stack([nearest_d, nearest_h, nearest_w], axis=-1), batch_dims=1)
+        
         if not was_batched:
             deformed_image = tf.squeeze(deformed_image, axis=0)
             deformed_label = tf.squeeze(deformed_label, axis=0)
-
+            
         return deformed_image, deformed_label
 
 class DataPipeline : 
@@ -1000,21 +1063,22 @@ class DataPipeline :
             image_address (str): The path to the directory containing image files.
             label_address (str): The path to the directory containing label files.
         """
+        num_classes = config['data']['num_classes']
         self.config = config 
         self.genrator = Genrator(config , image_address=image_address , label_address=label_address)
         self.patch_sampler = PatchSampler(config)
         self.rotator = keras_cv.layers.RandomRotation(
-            factors = 0.15 , 
+            factor = 0.15 , 
             interpolation="bilinear", 
-            segmentation_interpolation="nearest"
+            segmentation_classes=num_classes
             )
         self.zoomer = keras_cv.layers.RandomZoom(
-            factors=0.2, 
+            height_factor=0.2, 
             interpolation="bilinear",
-            segmentation_interpolation="nearest"                                   
+                  
             )
         self.randomElasticDeformation3D = RandomElasticDeformation3D() 
-        self.patch_shape = list (config['data']['patch_shape']) 
+        self.patch_shape = list (config['data']['image_patch_shape']) 
         self.final_batch_size = config['data']['batch'] * config['data']['num_replicas']
     
     def _geometric_augmentations(self, image, label):
@@ -1042,58 +1106,77 @@ class DataPipeline :
         along_width = tf.random.uniform(())>0.5
 
         if along_depth : 
-            image = tf.reverse(image , axis =0 )
-            label = tf.reverse(label, axis = 0) 
+            image = tf.reverse(image , axis =[0] )
+            label = tf.reverse(label, axis = [0]) 
         if along_height : 
-            image = tf.reverse(image , axis =1 )
-            label = tf.reverse(label , axis = 1) 
+            image = tf.reverse(image , axis =[1] )
+            label = tf.reverse(label , axis = [1]) 
         if along_width : 
-            image = tf.reverse(image  , axis = 2) 
-            label = tf.reverse(label , axis =2)
+            image = tf.reverse(image  , axis = [2]) 
+            label = tf.reverse(label , axis =[2])
         
         # rotation 
         # along xy
         if tf.random.uniform(())>0.5: 
+
+
             augmented = self.rotator({
                     'images': image , 
                     'segmentation_masks': label
                 })
-            image ,label = augmented['images'], augmented['segmentation_masks']
+            aug_image ,aug_label = augmented['images'], augmented['segmentation_masks']
+        
+            image = tf.cast(aug_image, image.dtype)
+            label = tf.cast(aug_label, label.dtype)
         
         # along xz
         if tf.random.uniform(())>0.5: 
+
             image = tf.transpose(image, perm=[1, 0, 2, 3])
             label = tf.transpose(label, perm=[1, 0, 2, 3])
             augmented = self.rotator({
                     'images': image , 
                     'segmentation_masks': label
                 })
-            image ,label = augmented['images'], augmented['segmentation_masks']
+            aug_image ,aug_label = augmented['images'], augmented['segmentation_masks']
+            image = tf.cast(aug_image, image.dtype)
+            label = tf.cast(aug_label, label.dtype)
+
             image = tf.transpose(image, perm=[1, 0, 2, 3])
             label = tf.transpose(label, perm=[1, 0, 2, 3])
 
+ 
+
         # along yz
         if tf.random.uniform(())>0.5: 
+
+
             image = tf.transpose(image, perm=[2, 1, 0, 3])
             label = tf.transpose(label, perm=[2, 1, 0, 3])
             augmented = self.rotator({
                 'images': image, 
                 'segmentation_masks': label
             })
-            image, label = augmented['images'], augmented['segmentation_masks']
+            aug_image, aug_label = augmented['images'], augmented['segmentation_masks']
+
+            image = tf.cast(aug_image, image.dtype)
+            label = tf.cast(aug_label, label.dtype)
+
             image = tf.transpose(image, perm=[2, 1, 0, 3])
             label = tf.transpose(label, perm=[2, 1, 0, 3])
-        
+
         # zoom 
         # along xy plan 
 
         if tf.random.uniform(())>0.5: 
+
             augmented = self.zoomer({
                     'images': image , 
                     'segmentation_masks': label
                 })
-            image ,label = augmented['images'], augmented['segmentation_masks']
-        
+            aug_image ,aug_label = augmented['images'], augmented['segmentation_masks']
+            image = tf.cast(aug_image, image.dtype)
+            label = tf.cast(aug_label, label.dtype)
         # along xz
         if tf.random.uniform(())>0.5: 
             image = tf.transpose(image, perm=[1, 0, 2, 3])
@@ -1102,21 +1185,32 @@ class DataPipeline :
                     'images': image , 
                     'segmentation_masks': label
                 })
-            image ,label = augmented['images'], augmented['segmentation_masks']
+            aug_image ,aug_label = augmented['images'], augmented['segmentation_masks']
+
+            image = tf.cast(aug_image, image.dtype)
+            label = tf.cast(aug_label, label.dtype)
+
             image = tf.transpose(image, perm=[1, 0, 2, 3])
             label = tf.transpose(label, perm=[1, 0, 2, 3])
 
+
         # along yz
         if tf.random.uniform(())>0.5: 
+
             image = tf.transpose(image, perm=[2, 1, 0, 3])
             label = tf.transpose(label, perm=[2, 1, 0, 3])
             augmented = self.zoomer({
                 'images': image, 
                 'segmentation_masks': label
             })
-            image, label = augmented['images'], augmented['segmentation_masks']
+            aug_image, aug_label = augmented['images'], augmented['segmentation_masks']
+
+            image = tf.cast(aug_image, image.dtype)
+            label = tf.cast(aug_label, label.dtype)
+
             image = tf.transpose(image, perm=[2, 1, 0, 3])
             label = tf.transpose(label, perm=[2, 1, 0, 3])
+
         
         # elastic_deformation 
         image , label = self.randomElasticDeformation3D(image , label)
@@ -1154,9 +1248,9 @@ class DataPipeline :
 
         image = tf.image.random_brightness(min_max_normalized_image , max_delta=0.1)
         image = tf.image.random_contrast(image, lower=0.7 , upper=1.1)
-        Gaussian_noise = tf.random.normal((tf.shape(image)),stddev=0.1)
+        Gaussian_noise = tf.random.normal((tf.shape(image)),stddev=0.1 , dtype = image.dtype)
         image = image + Gaussian_noise
-        gama_value = tf.random.uniform(() , minval=0.7 , maxval=1.5)
+        gama_value = tf.random.uniform(() , minval=0.7 , maxval=1.5 ,  dtype=image.dtype)
         image = tf.clip_by_value(image, 0.0, 1.0)
         image = tf.math.pow(image , gama_value)
         image = tf.clip_by_value(image ,clip_value_min=0.0 , clip_value_max=1.0 )
@@ -1270,7 +1364,7 @@ class DataPipeline :
             tf.data.Dataset: The final, fully-configured dataset, ready to be
                              distributed to the TPUs.
         """
-        self.patch_sampler.set_hard_patchs(hard_patchs_list=hard_patchs_list)
+        #self.patch_sampler.set_hard_patchs(hard_patchs_list=hard_patchs_list)
         train_dataset = tf.data.Dataset.from_generator(
             self.genrator.train_data_genrator , 
             output_types=(tf.float32 , tf.int32) , 
@@ -1312,7 +1406,7 @@ class DataPipeline :
         val_dataset = val_dataset.map(self._pad_volumes , num_parallel_calls=tf.data.AUTOTUNE)
         val_dataset = val_dataset.map(lambda image , label  : self.patch_sampler.sample(image, label ,stage ) , num_parallel_calls=tf.data.AUTOTUNE)
         val_dataset = val_dataset.unbatch()
-        val_dataset = val_dataset.map(self.val_normalization , num_parallel_calls=tf.data.AUTOTUNE)
+        val_dataset = val_dataset.map(self._val_normalization , num_parallel_calls=tf.data.AUTOTUNE)
         val_dataset= val_dataset.batch(self.final_batch_size , drop_remainder=True)
         val_dataset = val_dataset.prefetch(buffer_size=tf.data.AUTOTUNE)
 
