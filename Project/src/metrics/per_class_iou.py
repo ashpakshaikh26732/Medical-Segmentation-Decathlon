@@ -28,7 +28,7 @@ class PerClassIoU(tf.keras.metrics.Metric):
     ...     metrics=[PerClassIoU(n_classes=3)]
     ... )
     """
-    def __init__(self, n_classes=3, name='per_class_iou', **kwargs):
+    def __init__(self, n_classes, name='per_class_iou', **kwargs):
         super().__init__(name=name, **kwargs)
 
         self.n_classes = n_classes

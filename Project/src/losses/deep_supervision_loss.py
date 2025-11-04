@@ -11,27 +11,26 @@ import tensorflow as tf
 
 class DiceLoss3D(tf.keras.losses.Loss):
     """
-    A numerically stable, graph-compatible Dice loss for 3D semantic segmentation.
-    This version is hardened against all sources of NaN and graph compilation errors.
+    A numerically stable, WEIGHTED, graph-compatible Dice loss for 3D segmentation.
     """
-    def __init__(self, smooth=1e-5, name="DiceLoss3D"):
+    def __init__(self,num_classes ,  smooth=1e-5,class_weights=None, name="DiceLoss3D"): 
         super().__init__(name=name, reduction=tf.keras.losses.Reduction.NONE)
         self.smooth = smooth
 
-    def call(self, y_true, y_pred):
+        self.class_weights = class_weights if class_weights is not None else tf.constant([1.0] * 4, dtype=tf.float32)
+        
+        self.num_classes = num_classes
 
+    def call(self, y_true, y_pred):
         y_pred = tf.cast(y_pred, tf.float32)
         y_true = tf.cast(y_true, tf.float32)
         
-
         probs = tf.nn.softmax(y_pred, axis=-1)
         
-
         y_true_squeezed = tf.squeeze(y_true, axis=-1)
 
 
-        num_classes = tf.shape(probs)[-1]
-        y_true_one_hot = tf.one_hot(tf.cast(y_true_squeezed, tf.int32), depth=num_classes, dtype=probs.dtype)
+        y_true_one_hot = tf.one_hot(tf.cast(y_true_squeezed, tf.int32), depth=self.num_classes, dtype=probs.dtype)
 
         intersection = tf.reduce_sum(y_true_one_hot * probs, axis=[1, 2, 3])
         sum_true = tf.reduce_sum(y_true_one_hot, axis=[1, 2, 3])
@@ -42,16 +41,19 @@ class DiceLoss3D(tf.keras.losses.Loss):
         numerator = 2.0 * intersection + epsilon
         denominator = sum_true + sum_pred + epsilon
         
-        dice_score = numerator / denominator
+        dice_score_per_class = numerator / denominator
         
-        return 1.0 - tf.reduce_mean(dice_score, axis=-1)
+ 
+        weighted_dice_score = tf.reduce_sum(dice_score_per_class * self.class_weights) / tf.reduce_sum(self.class_weights)
+        
+        return 1.0 - weighted_dice_score
 
 class DeepSupervisionLoss3D(tf.keras.losses.Loss):
     """
     Calculates a combined loss from multiple output heads of a deeply-supervised model.
     This version is hardened to be fully graph-compatible and numerically stable.
     """
-    def __init__(self, class_weights, output_weights , loss_weights, name="DeepSupervisionLoss3D"):
+    def __init__(self, class_weights, output_weights , loss_weights,num_classes ,  name="DeepSupervisionLoss3D"):
         super().__init__(name=name, reduction=tf.keras.losses.Reduction.NONE)
 
 
@@ -61,7 +63,7 @@ class DeepSupervisionLoss3D(tf.keras.losses.Loss):
         self.class_weights = class_weights
         self.class_weights = tf.clip_by_value(tf.constant(class_weights, dtype=tf.float32), 1.0, 50.0)
         self.ce_loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True, reduction='none')
-        self.dice_loss_fn = DiceLoss3D()
+        self.dice_loss_fn = DiceLoss3D(num_classes = num_classes , class_weights=self.class_weights )
 
     def _resize_y_true_3d(self, y_true, y_pred):
 

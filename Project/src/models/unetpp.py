@@ -25,10 +25,10 @@ class convolutional_Block(tf.keras.layers.Layer):
             ]))
 
 
-    def call(self, inputs):
+    def call(self, inputs,training = True ):
         x = inputs
         for layer in self.conv_layers:
-            x = layer(x)
+            x = layer(x , training = training )
         return x
 
 
@@ -39,10 +39,10 @@ class encoder_block(tf.keras.layers.Layer):
         self.pool = tf.keras.layers.MaxPooling3D(pool_size=pool_size, name=f'pool_layer_{block_name}')
         self.dropout = tf.keras.layers.Dropout(rate=dropout)
 
-    def call(self, inputs):
-        f = self.convolutional_Block(inputs)
+    def call(self, inputs, training=True ):
+        f = self.convolutional_Block(inputs ,training = training)
         p = self.pool(f)
-        p = self.dropout(p)
+        p = self.dropout(p,training = training)
         return f, p
 
 
@@ -54,19 +54,19 @@ class encoder(tf.keras.models.Model):
         self.encoder_block_3 = encoder_block(256, "block_3")
         self.encoder_block_4 = encoder_block(512, "block_4")
 
-    def call(self, inputs):
-        f1, p1 = self.encoder_block_1(inputs)
-        f2, p2 = self.encoder_block_2(p1)
-        f3, p3 = self.encoder_block_3(p2)
-        f4, p4 = self.encoder_block_4(p3)
+    def call(self, inputs , training = True  ):
+        f1, p1 = self.encoder_block_1(inputs , training =training )
+        f2, p2 = self.encoder_block_2(p1,training = training )
+        f3, p3 = self.encoder_block_3(p2,training = training )
+        f4, p4 = self.encoder_block_4(p3 ,training = training )
         return (f1, f2, f3, f4), (p1, p2, p3, p4)
 
 class BottleNeck(tf.keras.models.Model): 
     def __init__(self) : 
         super().__init__()
         self.BottleNeck_layer = tf.keras.layers.Conv3D(filters=1024 , kernel_size= (2,2,2) , activation='relu' , padding = 'same' , name = "bottleneck_layer")
-    def call(self, inputs ): 
-        x = self.BottleNeck_layer(inputs)
+    def call(self, inputs , training=True ): 
+        x = self.BottleNeck_layer(inputs )
         return x 
 class Decoder_Block(tf.keras.layers.Layer): 
     def __init__(self , filters , block_name , dropout = 0.3) :
@@ -77,7 +77,7 @@ class Decoder_Block(tf.keras.layers.Layer):
         self.concat = tf.keras.layers.Concatenate() 
     def build(self, input_shape):
         super().build(input_shape)
-    def call(self, conv, inputs):
+    def call(self, conv, inputs , training = True ):
         u = self.conv_tranpose(inputs)
 
  
@@ -106,8 +106,9 @@ class Decoder_Block(tf.keras.layers.Layer):
             u = tf.transpose(u_final_shape, perm=[0, 1, 3, 2, 4])
         
         c = self.concat([u, conv])
-        c = self.dropout(c)
-        c = self.conv_layer(c)
+
+        c = self.dropout(c,training = training)
+        c = self.conv_layer(c ,  training=training)
         return c
 class Decoder(tf.keras.models.Model): 
     def __init__(self , num_classes): 
@@ -146,32 +147,32 @@ class Decoder(tf.keras.models.Model):
 
         super().build(input_shape)
 
-    def call (self, convs ): 
+    def call (self, convs, training = True ): 
         f1,f2,f3,f4,f5=convs 
-        decoder_31=self.decoder_block_31(f4,f5)
-        decoder_21 = self.decoder_block_21(f3,f4)
-        decoder_11 = self.decoder_block_11(f2,f3)
-        deocder_01 = self.decoder_block_01(f1,f2) 
+        decoder_31=self.decoder_block_31(f4,f5 ,training =  training)
+        decoder_21 = self.decoder_block_21(f3,f4 ,training = training)
+        decoder_11 = self.decoder_block_11(f2,f3 ,training = training)
+        deocder_01 = self.decoder_block_01(f1,f2 ,training = training) 
 
-        concat_22 = self.concat_22([f3,decoder_21]) 
-        decoder_22 = self.decoder_block_22(concat_22 , decoder_31)
+        concat_22 = self.concat_22([f3,decoder_21] ) 
+        decoder_22 = self.decoder_block_22(concat_22 , decoder_31 ,training = training)
 
         concat_12 = self.concat_12([f2,decoder_11])
-        decoder_12 = self.decoder_block_12(concat_12,decoder_21)
+        decoder_12 = self.decoder_block_12(concat_12,decoder_21 ,training = training)
 
-        concat_02 = self.concat_02([f1,deocder_01]) 
-        decoder_02 = self.decoder_block_02(concat_02 , decoder_11)
+        concat_02 = self.concat_02([f1,deocder_01] ) 
+        decoder_02 = self.decoder_block_02(concat_02 , decoder_11 ,training = training)
 
-        concat_13 = self.concat_13([f2,decoder_11,decoder_12])
-        decoder_13 = self.decoder_block_13(concat_13,decoder_22)
+        concat_13 = self.concat_13([f2,decoder_11,decoder_12] )
+        decoder_13 = self.decoder_block_13(concat_13,decoder_22 ,training = training)
 
 
-        concat_03 = self.concat_03([f1 , deocder_01, decoder_02])
-        decoder_03 = self.decoder_block_03(concat_03 , decoder_12)
+        concat_03 = self.concat_03([f1 , deocder_01, decoder_02] )
+        decoder_03 = self.decoder_block_03(concat_03 , decoder_12 ,training = training)
 
 
         concat_04 = self.concat_04([f1 , deocder_01 , decoder_02,decoder_03])
-        decoder_04 = self.decoder_block_04(concat_04 , decoder_13) 
+        decoder_04 = self.decoder_block_04(concat_04 , decoder_13 ,training= training) 
 
         output_01 = self.output_o1(deocder_01)
         output_02 = self.output_o2(decoder_02)
@@ -188,13 +189,10 @@ class UNET_PLUS_PLUS(tf.keras.models.Model):
         self.bottleneck = BottleNeck() 
         self.decoder = Decoder( num_classes) 
 
-    def  call(self, inputs ): 
-        convs , pools =self.encoder(inputs)
+    def  call(self, inputs , training = True ): 
+        convs , pools =self.encoder(inputs ,training =  training  )
         p1,p2,p3,p4=pools
-        f5=self.bottleneck(p4)
+        f5=self.bottleneck(p4,training =  training)
         f1,f2,f3,f4=convs
-        output_01 , output_02,output_03,output_04=self.decoder((f1,f2,f3,f4,f5))  
+        output_01 , output_02,output_03,output_04=self.decoder((f1,f2,f3,f4,f5) ,training =  training)  
         return output_01 , output_02, output_03, output_04
-
-
-

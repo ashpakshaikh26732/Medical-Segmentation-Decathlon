@@ -44,6 +44,31 @@ Workflow:
 """
 import sys, os
 import tensorflow as tf
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import os
+import argparse
+import yaml
+import requests
+import tarfile
+from tqdm import tqdm
+
+try:
+
+    tpu = tf.distribute.cluster_resolver.TPUClusterResolver(tpu='local')
+
+
+    tf.config.experimental_connect_to_cluster(tpu)
+    tf.tpu.experimental.initialize_tpu_system(tpu)
+
+
+    strategy = tf.distribute.TPUStrategy(tpu)
+
+    print("✅ TPU is running on:", tpu.master())
+
+except ValueError as e:
+    print("❌ TPU is not available:", e)
 
 
 
@@ -65,18 +90,9 @@ from Project.src.metrics.per_class_iou import *
 from Project.src.models.swim_trans_unet import *
 from Project.src.models.transunet import *
 from Project.src.models.unetpp import *
-
-import tensorflow as tf
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import os
-import argparse
-import yaml
-import requests
-import tarfile
-from tqdm import tqdm
-
+from Project.src.data.ohem.ohem_inferance import * 
+from Project.src.data.ohem.ohem_miner import * 
+from Project.src.data.ohem.ohem_trainer import * 
 
 
 pd.set_option('display.max_rows', 500)
@@ -117,22 +133,6 @@ with open(args.config ,'r') as f :
     config = yaml.safe_load(f)
     
 
-try:
-
-    tpu = tf.distribute.cluster_resolver.TPUClusterResolver(tpu='local')
-
-
-    tf.config.experimental_connect_to_cluster(tpu)
-    tf.tpu.experimental.initialize_tpu_system(tpu)
-
-
-    strategy = tf.distribute.TPUStrategy(tpu)
-
-    print("✅ TPU is running on:", tpu.master())
-
-except ValueError as e:
-    print("❌ TPU is not available:", e)
-
 model_registry = {
     "unet_plus_plus" :UNET_PLUS_PLUS ,
     'swin_transunet' : SwinTransUnet ,
@@ -152,18 +152,22 @@ label_address = os.path.join('/kaggle/working',task_name , 'labelsTr')
 
 
 
+
 with strategy.scope() :
     if  (config['model']['name'] == 'swin_transunet') :
         model = model_registry[config['model']['name']](config)
     else : 
         model = model_registry[config['model']['name']](config['data']['num_classes'])
-        
+
+    final_batch_size = config['data']['batch'] * config['data']['num_replicas']
+    
     sample_input = tf.random.uniform(shape=tuple(config['data']['image_patch_shape']))
     sample_input = tf.expand_dims(sample_input , axis = 0)
+    num_classes = int(config['data']['num_classes'] )
     if config['model']['name'] =='unet_plus_plus':
-        loss_fn  = loss_registry[config['loss']](config['data']['class_weights'] , config['data']['output_weights'] , config['data']['loss_weights'] )
+        loss_fn  = loss_registry[config['loss']](config['data']['class_weights'] , config['data']['output_weights'] , config['data']['loss_weights'] , num_classes)
     else :
-        loss_fn = loss_registry[config['loss']](config['data']['class_weights'] , config['data']['loss_weights'])
+        loss_fn = loss_registry[config['loss']](config['data']['class_weights'] , config['data']['loss_weights'] , num_classes )
     model(sample_input)
     print("Model built:", model.built)
     optimizer = tf.keras.optimizers.AdamW(learning_rate=float(config['optimizer']['starting_lr']),weight_decay=float(config['optimizer']['weight_decay']))
@@ -190,7 +194,7 @@ with strategy.scope():
 
                 model_logits = model_output[-1]
                 
-                loss =  tf.nn.compute_average_loss(per_example_loss=per_example_loss , global_batch_size=dataPipeline.final_batch_size)
+                loss =  tf.nn.compute_average_loss(per_example_loss=per_example_loss , global_batch_size=final_batch_size)
                 
                 
                 #scaled_loss = optimizer.scale_loss(loss)
@@ -199,7 +203,7 @@ with strategy.scope():
                 model_logits = model(x_train)
                 #model_logits = tf.clip_by_value(model_logits, -15.0, 15.0)
                 per_example_loss = loss_fn(y_train , model_logits)
-                loss = tf.nn.compute_average_loss(per_example_loss=per_example_loss , global_batch_size=dataPipeline.final_batch_size)
+                loss = tf.nn.compute_average_loss(per_example_loss=per_example_loss , global_batch_size=final_batch_size)
                 #scaled_loss = optimizer.scale_loss(loss)
         
         gradients = tape.gradient(loss , model.trainable_variables)
@@ -225,11 +229,11 @@ with strategy.scope():
             model_output = model(x_val)
             model_logits = model_output[-1]
             per_example_loss = loss_fn(y_val , model_output)
-            val_loss = tf.nn.compute_average_loss(per_example_loss=per_example_loss , global_batch_size=dataPipeline.final_batch_size)
+            val_loss = tf.nn.compute_average_loss(per_example_loss=per_example_loss , global_batch_size=final_batch_size)
         else :
             model_logits = model(x_val)
             per_example_loss = loss_fn(y_val , model_logits)
-            val_loss  = tf.nn.compute_average_loss(per_example_loss=per_example_loss , global_batch_size=dataPipeline.final_batch_size)
+            val_loss  = tf.nn.compute_average_loss(per_example_loss=per_example_loss , global_batch_size=final_batch_size)
 
         per_class_iou_val.update_state(y_val , model_logits)
         per_class_dice_val.update_state(y_val , model_logits)
@@ -309,12 +313,18 @@ global_step = [start*config['checkpoint']['batches_per_epoch']+1]
 
 if start < int(config['checkpoint']['stage_2_epoch']) : 
     stage = 'stage1_foundational'
+    print('================================================================================')
+    print(' stage1_foundational  ')
+    print('================================================================================')
     dataPipeline= DataPipeline(config , image_address , label_address)
     train_dataset , val_dataset = dataPipeline.get_dataset(stage = stage)
     train_dataset = strategy.experimental_distribute_dataset(train_dataset)
     val_dataset = strategy.experimental_distribute_dataset(val_dataset)
 
 elif start>= int(config['checkpoint']['stage_2_epoch']) and start <=int(config['checkpoint']['stage_3_epoch']) : 
+    print('================================================================================')
+    print(' stage2_refinement  ')
+    print('================================================================================')
     stage = 'stage2_refinement'
     dataPipeline= DataPipeline(config , image_address , label_address)
     train_dataset , val_dataset = dataPipeline.get_dataset(stage = stage)
@@ -322,11 +332,18 @@ elif start>= int(config['checkpoint']['stage_2_epoch']) and start <=int(config['
     val_dataset = strategy.experimental_distribute_dataset(val_dataset)
 
 else : 
-    stage = 'stage3_hard_mining'
-    dataPipeline= DataPipeline(config , image_address , label_address)
-    train_dataset , val_dataset = dataPipeline.get_dataset(stage = stage)
+    print('================================================================================')
+    print(' stage3_hard_mining  ')
+    print('================================================================================')
+    miner = OHEMDataPipeline(config , image_address , label_address )
+    tpu_dataset , metadata_dataset = miner.get_mining_dataset() 
+    ohem_inference = OHEM_Inference(config, tpu_dataset , metadata_dataset , model , loss_fn , strategy)
+    hard_patch_metadata=ohem_inference()
+    ohem_datapipeline =OHEM_DataPipeline(config , image_address , label_address , hard_patch_metadata)
+    train_dataset , val_dataset = ohem_datapipeline.get_dataset()
     train_dataset = strategy.experimental_distribute_dataset(train_dataset)
     val_dataset = strategy.experimental_distribute_dataset(val_dataset)
+    
 
 for epoch in range(start ,  config['checkpoint']['total_epoch']):
 
@@ -343,6 +360,18 @@ for epoch in range(start ,  config['checkpoint']['total_epoch']):
         val_dataset = strategy.experimental_distribute_dataset(val_dataset)
         master_callback.EarlyStoppingCallback.wait = 0
 
+    if (epoch > int(config['checkpoint']['stage_3_epoch']) and epoch % int(config['checkpoint']['ohem_call_duration']) ==0): 
+        print('================================================================================')
+        print(' stage3_hard_mining  ')
+        print('================================================================================')
+        miner = OHEMDataPipeline(config , image_address , label_address )
+        tpu_dataset , metadata_dataset = miner.get_mining_dataset() 
+        ohem_inference = OHEM_Inference(config, tpu_dataset , metadata_dataset , model , loss_fn , strategy)
+        hard_patch_metadata=ohem_inference()
+        ohem_datapipeline =OHEM_DataPipeline(config , image_address , label_address , hard_patch_metadata)
+        train_dataset , val_dataset = ohem_datapipeline.get_dataset()
+        train_dataset = strategy.experimental_distribute_dataset(train_dataset)
+        val_dataset = strategy.experimental_distribute_dataset(val_dataset)
 
     losses,nan_detected = train_model_for_one_epoch(epoch , global_step)
     
@@ -383,12 +412,6 @@ for epoch in range(start ,  config['checkpoint']['total_epoch']):
     per_class_dice.reset_state()
     per_class_iou_val.reset_state()
     per_class_dice_val.reset_state()
-    stop_training = master_callback.on_epoch_end(epoch , data)
+    stop_training = master_callback.on_epoch_end(epoch , data , val_dataset)
     if stop_training :
         break
-
-
-
-
-
-

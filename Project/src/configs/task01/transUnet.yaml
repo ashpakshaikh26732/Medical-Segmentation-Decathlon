@@ -20,8 +20,8 @@ data :
     stage2_fg_ratio : 0.5 
     stage3_fg_ratio : 0.5
     stage3_hard_sample_ratio: 0.25
-    stage2_intra_class_ratio : [0.128 , 0.461 , 0.411 ]
-    
+    #stage2_intra_class_ratio : [0.128 , 0.461 , 0.411 ]
+    stage2_intra_class_ratio : [0.37, 0.33, 0.30]
 
 
     num_patches : 32 

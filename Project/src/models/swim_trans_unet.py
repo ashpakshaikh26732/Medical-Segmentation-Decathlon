@@ -229,4 +229,3 @@ class SwinTransUnet(tf.keras.models.Model):
         f1, f2, f3, f4 = convs
         x = self.decoder((f1, f2, f3, f4))
         return x
-
