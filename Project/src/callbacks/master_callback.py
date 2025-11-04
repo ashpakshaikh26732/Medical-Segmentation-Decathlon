@@ -78,6 +78,7 @@ class master_callback(tf.keras.callbacks.Callback):
         self.EarlyStoppingCallback = EarlyStoppingCallback(min_delta=self.min_delta , patience=self.patiance)
         self.TrainingLogger = TrainingLogger(batches_per_epoch=self.batches_per_epoch)
 
+        
     def on_train_begain(self):
         """Loads the latest checkpoint and returns the starting epoch."""
         return self.checkpoint_callback.load_latest_model()
@@ -94,7 +95,7 @@ class master_callback(tf.keras.callbacks.Callback):
         """Delegates to the logger to update batch-wise metrics."""
         return self.TrainingLogger.on_batch_end(batch=batch  , epoch = epoch , data=data)
 
-    def on_epoch_end(self, epoch ,data):
+    def on_epoch_end(self, epoch ,data,val_dataset):
         """Delegates logging and checkpointing, logs to TensorBoard, and checks for early stopping.
 
         Args:
@@ -129,5 +130,6 @@ class master_callback(tf.keras.callbacks.Callback):
 
         self.writer.flush()
         self.checkpoint_callback.on_epoch_end(epoch=epoch )
+
         self.stop =  self.EarlyStoppingCallback.on_epoch_end(val_loss=data['val_loss'],epoch = epoch)
         return self.stop

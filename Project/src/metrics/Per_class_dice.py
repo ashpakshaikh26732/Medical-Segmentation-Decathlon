@@ -30,7 +30,7 @@ class PerClassDice(tf.keras.metrics.Metric):
     ...     metrics=[PerClassDice(n_classes=3)]
     ... )
     """
-    def __init__(self, n_classes=3, name='per_class_dice', **kwargs):
+    def __init__(self, n_classes, name='per_class_dice', **kwargs):
         super().__init__(name=name, **kwargs)
 
         self.smooth = 1e-6
