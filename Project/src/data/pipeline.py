@@ -347,6 +347,7 @@ import os
 import numpy as np
 import tensorflow_graphics.geometry.transformation as tfg_transformation
 import keras_cv
+import scipy
 
 
 repo_path = "/content/drive/MyDrive/Medical-Segmentation-Decathlon"
@@ -395,29 +396,31 @@ class Genrator :
         Resizes a 3D volume to a target shape specified in the config using
         the modern tf.image.resize function for robust interpolation.
         """
-
+        # Get target shape from config, e.g., [D, H, W, C]
         target_image_shape = self.config['data']['image_shape']
         target_label_shape = self.config['data']['label_shape']
 
+        # --- Resize Image (using 'bilinear' interpolation) ---
+        # 1. Resize Height and Width: input shape (D, H, W, C)
         resized_hw = tf.image.resize(
             image,
             (target_image_shape[1], target_image_shape[2]),
             method='bilinear'
         )
-
+        # 2. Transpose for depth resizing: new shape (H, W, D, C)
         transposed = tf.transpose(resized_hw, perm=[1, 2, 0, 3])
-
+        # 3. Resize Depth: input shape (H, W, D, C), resizing the (W, D) plane
         resized_d = tf.image.resize(
             transposed,
-            (target_image_shape[2], target_image_shape[0]), 
+            (target_image_shape[2], target_image_shape[0]), # Resizing W and D dims
             method='bilinear'
         )
-
+        # 4. Transpose back to original format: final shape (D, H, W, C)
         final_image = tf.transpose(resized_d, perm=[2, 0, 1, 3])
         final_image.set_shape(target_image_shape)
 
 
-
+        # --- Resize Label (using 'nearest' to preserve integer class IDs) ---
         resized_hw_label = tf.image.resize(
             label,
             (target_label_shape[1], target_label_shape[2]),
@@ -440,22 +443,53 @@ class Genrator :
         label = tf.cast(label , dtype = dtype)
         return image , label
 
-    def load_data(self, path: str) -> np.ndarray:
+    def load_data(self, path: str, is_label: bool = False) -> np.ndarray:
         """
-        Loads a single NIfTI file from a given path.
-
-        Args:
-            path (str): The full path to the .nii.gz file.
-
-        Returns:
-            np.ndarray: The image or label data as a 4D NumPy array (H, W, D, C).
+        Loads and resamples a single NIfTI file to isotropic spacing.
         """
-        data = nib.load(path)
-        data = data.get_fdata().astype(np.float32)
-        if len(data.shape) == 3:
-            data = np.expand_dims(data, axis=-1)
-
-        return data
+        nii = nib.load(path)
+        volume = nii.get_fdata().astype(np.float32)
+        
+        # Check if volume is already 4D (multi-channel like BrainTumour)
+        has_channels = len(volume.shape) == 4
+        
+        if has_channels:
+            # Separate channels, resample each, then stack back
+            num_channels = volume.shape[-1]
+            spatial_volume = volume[..., 0]  # Get spatial shape from first channel
+        else:
+            spatial_volume = volume
+            num_channels = 1
+        
+        spacing = np.array(nii.header.get_zooms()[:3], dtype=np.float32)
+        target_spacing = np.array(self.config['data']['target_spacing'], dtype=np.float32)
+        resize_factor = spacing / target_spacing
+        
+        # Calculate new shape based on SPATIAL dimensions only
+        new_shape = np.round(np.array(spatial_volume.shape) * resize_factor).astype(int)
+        
+        order = 0 if is_label else 1
+        
+        if has_channels:
+            # Resample each channel separately
+            resampled_channels = []
+            for c in range(num_channels):
+                resampled = scipy.ndimage.zoom(
+                    volume[..., c], 
+                    zoom=new_shape / np.array(volume[..., c].shape), 
+                    order=order
+                )
+                resampled_channels.append(resampled)
+            volume = np.stack(resampled_channels, axis=-1)
+        else:
+            volume = scipy.ndimage.zoom(
+                volume, 
+                zoom=new_shape / np.array(volume.shape), 
+                order=order
+            )
+            volume = np.expand_dims(volume, axis=-1)
+        
+        return volume
 
     def get_data(self):
         """
@@ -487,16 +521,24 @@ class Genrator :
             Tuple[np.ndarray, np.ndarray]: A tuple containing the 4D image volume
             and the 4D label volume as NumPy arrays.
         """
-        images  ,labels = self.get_data()
+        
+        if isinstance(self.image_address , list) : 
+            train_images_paths = self.image_address[self.val_count:]
+            train_labels_paths = self.label_address[self.val_count:]
 
-        train_images_paths = images[self.val_count:]
-        train_labels_paths = labels[self.val_count:]
-        train_images_paths = list(map(self.getFullImageAddress, train_images_paths))
-        train_labels_paths = list(map(self.getFullLabelAddress, train_labels_paths))
+        else : 
+            
+        
+            images  ,labels = self.get_data()
+
+            train_images_paths = images[self.val_count:]
+            train_labels_paths = labels[self.val_count:]
+            train_images_paths = list(map(self.getFullImageAddress, train_images_paths))
+            train_labels_paths = list(map(self.getFullLabelAddress, train_labels_paths))
 
         for img_path , label_path in zip(train_images_paths, train_labels_paths):
             image_volume = self.load_data(img_path)
-            label_volume = self.load_data(label_path)
+            label_volume = self.load_data(label_path , True)
 
             yield image_volume , label_volume
 
@@ -511,17 +553,23 @@ class Genrator :
             Tuple[np.ndarray, np.ndarray]: A tuple containing the 4D image volume
             and the 4D label volume as NumPy arrays.
         """
-        images  ,labels = self.get_data()
 
-        val_images_paths = images[:self.val_count]
-        val_labels_paths = labels[:self.val_count]
+        if isinstance(self.image_address , list) : 
+            val_images_paths = self.image_address[self.val_count:]
+            val_labels_paths = self.label_address[self.val_count:]
 
-        val_images_paths = list(map(self.getFullImageAddress, val_images_paths))
-        val_labels_paths = list(map(self.getFullLabelAddress, val_labels_paths))
+        else : 
+            images  ,labels = self.get_data()
+
+            val_images_paths = images[:self.val_count]
+            val_labels_paths = labels[:self.val_count]
+
+            val_images_paths = list(map(self.getFullImageAddress, val_images_paths))
+            val_labels_paths = list(map(self.getFullLabelAddress, val_labels_paths))
 
         for img_path , label_path  in zip(val_images_paths , val_labels_paths):
             val_images_volume = self.load_data(img_path)
-            val_labels_volume = self.load_data(label_path)
+            val_labels_volume = self.load_data(label_path , True )
 
             yield val_images_volume , val_labels_volume
 
@@ -933,14 +981,14 @@ class RandomElasticDeformation3D(tf.keras.layers.Layer):
                  **kwargs):
         super().__init__(**kwargs)
         self.grid_size = grid_size
-        self.alpha = tf.constant(alpha, dtype=tf.bfloat16)
-        self.sigma = tf.constant(sigma, dtype=tf.bfloat16)
+        self.alpha = tf.constant(alpha, dtype=tf.float32)
+        self.sigma = tf.constant(sigma, dtype=tf.float32)
 
     def _separable_gaussian_filter_3d(self, tensor, sigma):
         """Applies a fast, separable 3D Gaussian filter."""
         kernel_size = tf.cast(2 * tf.round(3 * sigma) + 1, dtype=tf.int32)
-        ax = tf.range(-tf.cast(kernel_size // 2, tf.bfloat16) + 1.0, 
-                      tf.cast(kernel_size // 2, tf.bfloat16) + 1.0)
+        ax = tf.range(-tf.cast(kernel_size // 2, tf.float32) + 1.0, 
+                      tf.cast(kernel_size // 2, tf.float32) + 1.0)
         kernel_1d = tf.exp(-(ax**2) / (2.0 * sigma**2))
         kernel_1d = kernel_1d / tf.reduce_sum(kernel_1d)
         
@@ -961,7 +1009,9 @@ class RandomElasticDeformation3D(tf.keras.layers.Layer):
 
     def call(self, image_volume, label_volume):
         original_image_dtype = image_volume.dtype
-        image_volume = tf.cast(image_volume, dtype=tf.bfloat16)
+        original_label_dtype = label_volume.dtype
+        image_volume = tf.cast(image_volume, dtype=tf.float32)
+        label_volume = tf.cast(label_volume , dtype = tf.float32 )
         
         was_batched = True
         if image_volume.shape.rank == 4:
@@ -974,9 +1024,9 @@ class RandomElasticDeformation3D(tf.keras.layers.Layer):
         
         coarse_flow = tf.random.uniform(
             shape=(B, self.grid_size[0], self.grid_size[1], self.grid_size[2], 3),
-            minval=-1, maxval=1, dtype=tf.bfloat16)
+            minval=-1, maxval=1, dtype=tf.float32)
 
-
+        # Reshape the 5D tensor to 4D to use tf.image.resize, then reshape back.
         flow = tf.reshape(coarse_flow, [B * self.grid_size[0], self.grid_size[1], self.grid_size[2], 3])
         flow = tf.image.resize(flow, size=[H, W], method='bicubic')
         flow = tf.reshape(flow, [B, self.grid_size[0], H, W, 3])
@@ -988,8 +1038,9 @@ class RandomElasticDeformation3D(tf.keras.layers.Layer):
         flow = tf.reshape(flow, [B, H, W, D, 3])
         flow = tf.transpose(flow, perm=[0, 3, 1, 2, 4])
 
-
-        flow = tf.cast(flow, dtype=tf.bfloat16)
+        # --- THE FIX IS HERE ---
+        # Recast flow to bfloat16, as tf.image.resize upcasts bicubic output to float32.
+        flow = tf.cast(flow, dtype=tf.float32)
 
         flow_components = tf.unstack(flow, axis=-1)
         smoothed_components = []
@@ -1003,9 +1054,9 @@ class RandomElasticDeformation3D(tf.keras.layers.Layer):
         flow = smoothed_flow * self.alpha
 
         grid_d, grid_h, grid_w = tf.meshgrid(
-            tf.range(D, dtype=tf.bfloat16),
-            tf.range(H, dtype=tf.bfloat16),
-            tf.range(W, dtype=tf.bfloat16),
+            tf.range(D, dtype=tf.float32),
+            tf.range(H, dtype=tf.float32),
+            tf.range(W, dtype=tf.float32),
             indexing='ij'
         )
         grid = tf.stack([grid_d, grid_h, grid_w], axis=-1)
@@ -1054,8 +1105,9 @@ class RandomElasticDeformation3D(tf.keras.layers.Layer):
         if not was_batched:
             deformed_image = tf.squeeze(deformed_image, axis=0)
             deformed_label = tf.squeeze(deformed_label, axis=0)
-            
-        return deformed_image, deformed_label
+        
+        
+        return tf.cast( deformed_image ,original_image_dtype), tf.cast( deformed_label , original_label_dtype)
 
 class DataPipeline : 
     def __init__(self, config , image_address , label_address):
@@ -1075,203 +1127,484 @@ class DataPipeline :
         self.config = config 
         self.genrator = Genrator(config , image_address=image_address , label_address=label_address)
         self.patch_sampler = PatchSampler(config)
-        self.rotator = keras_cv.layers.RandomRotation(
-            factor = 0.15 , 
-            interpolation="bilinear", 
-            segmentation_classes=num_classes
-            )
-        self.zoomer = keras_cv.layers.RandomZoom(
-            height_factor=0.2, 
-            interpolation="bilinear",
+        # self.rotator = keras_cv.layers.RandomRotation(
+        #     factor = 0.15 , 
+        #     interpolation="bilinear", 
+        #     segmentation_classes=num_classes
+        #     )
+        # self.zoomer = keras_cv.layers.RandomZoom(
+        #     height_factor=0.2, 
+        #     interpolation="bilinear",
                   
-            )
+        #     )
+        self.rotator = keras_cv.layers.RandomRotation(
+            factor=0.083,  # ±30° (0.083 * 360 ≈ 30°) - more reasonable than ±54°
+            interpolation="bilinear",
+            segmentation_classes=num_classes
+        )
+        
+        self.zoomer = keras_cv.layers.RandomZoom(
+            height_factor=(-0.15, 0.15),  # ±15% zoom
+            interpolation="bilinear",
+        )
         self.randomElasticDeformation3D = RandomElasticDeformation3D() 
         self.patch_shape = list (config['data']['image_patch_shape']) 
         self.final_batch_size = config['data']['batch'] * config['data']['num_replicas']
-    
+
+        self.image_address = image_address
+        self.label_address = label_address 
+
+        # if int(config['task']) == 3:
+        #     self.clean_liver_duplicates()
+        
     def _geometric_augmentations(self, image, label):
         """
-        Applies a sequence of random, in-graph 3D geometric augmentations.
+        Apply State-of-the-Art 3D geometric data augmentations for medical
+        image segmentation, inspired by the nnU-Net v2 training pipeline.
 
-        This method implements the state-of-the-art augmentation strategy
-        popularized by frameworks like nnU-Net. All operations are native
-        TensorFlow or KerasCV, ensuring a high-performance, graph-native pipeline.
-        The augmentations include random mirroring, 3D rotation, 3D zoom, and
-        3D elastic deformation.
+        All augmentations operate on full 3D volumes (D × H × W × C) and are
+        implemented using `tf.cond` to maintain static-graph compatibility
+        for distributed TPU/GPU execution.
 
+        This augmentation strategy significantly increases robustness to:
+            • Scanner orientation variability
+            • Field-of-view inconsistencies
+            • Anatomical acquisition differences
+            • Geometric distortions seen in multi-center datasets
+
+        ────────────────────────────────────────────────────────────────
+        Augmentation Policies (random, independent application)
+        ────────────────────────────────────────────────────────────────
+        ✓ **Random 3-Axis Flipping** (p = 0.5 per axis)
+            - Depth (axial plane)
+            - Height (coronal plane)
+            - Width (sagittal plane)
+        Ensures anatomical mirroring diversity.
+
+        ✓ **Random Small-Angle Rotation** (p = 0.3 per orthogonal plane)
+            - XY rotation → axial anatomical perturbation
+            - XZ rotation → coronal perspective rotation
+            - YZ rotation → sagittal tilt
+        Implemented using KerasCV with label-aware interpolation.
+
+        ✓ **Random 3-D Scaling / Zooming** (p = 0.3 per plane)
+            - Independent plane-wise zoom simulating scanner zoom variance
+        Image interpolation: bilinear (artifact-free)
+        Label interpolation: nearest-neighbor (preserves class IDs)
+
+        ✓ **3-D Elastic Deformation** (p = 0.3)
+            - Smooth nonlinear local distortions
+            - Simulates true patient positioning and anatomical variations
+        Uses fast GPU/TPU-optimized trilinear interpolation.
+
+        ────────────────────────────────────────────────────────────────
+        Input / Output
+        ────────────────────────────────────────────────────────────────
         Args:
-            image (tf.Tensor): The 4D input image volume (D, H, W, C).
-            label (tf.Tensor): The 4D input label volume (D, H, W, C).
+            image : tf.Tensor
+                4D tensor [D, H, W, C] of input intensity volume.
+            label : tf.Tensor
+                4D tensor [D, H, W, 1] or [D, H, W, C_labels] segmentation mask.
 
         Returns:
-            Tuple[tf.Tensor, tf.Tensor]: A tuple containing the augmented image
-            and label volumes.
+            image : tf.Tensor
+                Augmented image tensor (same shape & dtype).
+            label : tf.Tensor
+                Geometrically transformed segmentation mask,
+                with perfect spatial alignment to the augmented image.
+
+        Notes:
+            • Fully differentiable — safe within model training graph
+            • All transformations maintain one-hot class integrity
+            • Designed for multi-modal MRI & HU-preserved CT workflows
         """
-
-        # fliping 
-        along_depth = tf.random.uniform(())>0.5
-        along_height = tf.random.uniform(())>0.5
-        along_width = tf.random.uniform(())>0.5
-
-        if along_depth : 
-            image = tf.reverse(image , axis =[0] )
-            label = tf.reverse(label, axis = [0]) 
-        if along_height : 
-            image = tf.reverse(image , axis =[1] )
-            label = tf.reverse(label , axis = [1]) 
-        if along_width : 
-            image = tf.reverse(image  , axis = [2]) 
-            label = tf.reverse(label , axis =[2])
         
-        # rotation 
-        # along xy
-        if tf.random.uniform(())>0.5: 
-
-
-            augmented = self.rotator({
-                    'images': image , 
-                    'segmentation_masks': label
-                })
-            aug_image ,aug_label = augmented['images'], augmented['segmentation_masks']
+        # ============================================
+        # 1. RANDOM FLIPPING (p=0.5 per axis)
+        # ============================================
+        # Along depth (axial)
+        image, label = tf.cond(
+            tf.random.uniform(()) > 0.5,
+            lambda: (tf.reverse(image, axis=[0]), tf.reverse(label, axis=[0])),
+            lambda: (image, label)
+        )
         
-            image = tf.cast(aug_image, image.dtype)
-            label = tf.cast(aug_label, label.dtype)
+        # Along height (coronal)
+        image, label = tf.cond(
+            tf.random.uniform(()) > 0.5,
+            lambda: (tf.reverse(image, axis=[1]), tf.reverse(label, axis=[1])),
+            lambda: (image, label)
+        )
         
-        # along xz
-        if tf.random.uniform(())>0.5: 
+        # Along width (sagittal)
+        image, label = tf.cond(
+            tf.random.uniform(()) > 0.5,
+            lambda: (tf.reverse(image, axis=[2]), tf.reverse(label, axis=[2])),
+            lambda: (image, label)
+        )
+        
+        # ============================================
+        # 2. RANDOM ROTATION (p=0.3 per plane)
+        # ============================================
+        # Along XY plane (axial rotation)
+        def rotate_xy(img, lbl):
+            augmented = self.rotator({'images': img, 'segmentation_masks': lbl})
+            return tf.cast(augmented['images'], img.dtype), tf.cast(augmented['segmentation_masks'], lbl.dtype)
+        
+        image, label = tf.cond(
+            tf.random.uniform(()) > 0.7,  # p=0.3
+            lambda: rotate_xy(image, label),
+            lambda: (image, label)
+        )
+        
+        # Along XZ plane
+        def rotate_xz(img, lbl):
+            img_t = tf.transpose(img, perm=[1, 0, 2, 3])
+            lbl_t = tf.transpose(lbl, perm=[1, 0, 2, 3])
+            augmented = self.rotator({'images': img_t, 'segmentation_masks': lbl_t})
+            img_r = tf.cast(augmented['images'], img.dtype)
+            lbl_r = tf.cast(augmented['segmentation_masks'], lbl.dtype)
+            return tf.transpose(img_r, perm=[1, 0, 2, 3]), tf.transpose(lbl_r, perm=[1, 0, 2, 3])
+        
+        image, label = tf.cond(
+            tf.random.uniform(()) > 0.7,  # p=0.3
+            lambda: rotate_xz(image, label),
+            lambda: (image, label)
+        )
+        
+        # Along YZ plane
+        def rotate_yz(img, lbl):
+            img_t = tf.transpose(img, perm=[2, 1, 0, 3])
+            lbl_t = tf.transpose(lbl, perm=[2, 1, 0, 3])
+            augmented = self.rotator({'images': img_t, 'segmentation_masks': lbl_t})
+            img_r = tf.cast(augmented['images'], img.dtype)
+            lbl_r = tf.cast(augmented['segmentation_masks'], lbl.dtype)
+            return tf.transpose(img_r, perm=[2, 1, 0, 3]), tf.transpose(lbl_r, perm=[2, 1, 0, 3])
+        
+        image, label = tf.cond(
+            tf.random.uniform(()) > 0.7,  # p=0.3
+            lambda: rotate_yz(image, label),
+            lambda: (image, label)
+        )
+        
+        # ============================================
+        # 3. RANDOM ZOOM/SCALE (p=0.3 per plane)
+        # ============================================
+        # Along XY plane
+        def zoom_xy(img, lbl):
+            augmented = self.zoomer({'images': img, 'segmentation_masks': lbl})
+            return tf.cast(augmented['images'], img.dtype), tf.cast(augmented['segmentation_masks'], lbl.dtype)
+        
+        image, label = tf.cond(
+            tf.random.uniform(()) > 0.7,  # p=0.3
+            lambda: zoom_xy(image, label),
+            lambda: (image, label)
+        )
+        
+        # Along XZ plane
+        def zoom_xz(img, lbl):
+            img_t = tf.transpose(img, perm=[1, 0, 2, 3])
+            lbl_t = tf.transpose(lbl, perm=[1, 0, 2, 3])
+            augmented = self.zoomer({'images': img_t, 'segmentation_masks': lbl_t})
+            img_z = tf.cast(augmented['images'], img.dtype)
+            lbl_z = tf.cast(augmented['segmentation_masks'], lbl.dtype)
+            return tf.transpose(img_z, perm=[1, 0, 2, 3]), tf.transpose(lbl_z, perm=[1, 0, 2, 3])
+        
+        image, label = tf.cond(
+            tf.random.uniform(()) > 0.7,  # p=0.3
+            lambda: zoom_xz(image, label),
+            lambda: (image, label)
+        )
+        
+        # Along YZ plane
+        def zoom_yz(img, lbl):
+            img_t = tf.transpose(img, perm=[2, 1, 0, 3])
+            lbl_t = tf.transpose(lbl, perm=[2, 1, 0, 3])
+            augmented = self.zoomer({'images': img_t, 'segmentation_masks': lbl_t})
+            img_z = tf.cast(augmented['images'], img.dtype)
+            lbl_z = tf.cast(augmented['segmentation_masks'], lbl.dtype)
+            return tf.transpose(img_z, perm=[2, 1, 0, 3]), tf.transpose(lbl_z, perm=[2, 1, 0, 3])
+        
+        image, label = tf.cond(
+            tf.random.uniform(()) > 0.7,  # p=0.3
+            lambda: zoom_yz(image, label),
+            lambda: (image, label)
+        )
+        
+        # ============================================
+        # 4. ELASTIC DEFORMATION (p=0.3)
+        # ============================================
+        def apply_elastic(img, lbl):
+            img_def, lbl_def = self.randomElasticDeformation3D(img, lbl)
+            return tf.cast(img_def, img.dtype), tf.cast(lbl_def, lbl.dtype)
+        
+        image, label = tf.cond(
+            tf.random.uniform(()) > 0.7,  # p=0.3
+            lambda: apply_elastic(image, label),
+            lambda: (image, label)
+        )
+        
+        return image, label
 
-            image = tf.transpose(image, perm=[1, 0, 2, 3])
-            label = tf.transpose(label, perm=[1, 0, 2, 3])
-            augmented = self.rotator({
-                    'images': image , 
-                    'segmentation_masks': label
-                })
-            aug_image ,aug_label = augmented['images'], augmented['segmentation_masks']
-            image = tf.cast(aug_image, image.dtype)
-            label = tf.cast(aug_label, label.dtype)
+    def _intensity_augmentations(self, image, label):
+        """
+        Applies State-of-the-Art (SOTA) intensity augmentations to 3D medical images,
+        modeled after the official nnU-Net v2 preprocessing and training pipeline.
 
-            image = tf.transpose(image, perm=[1, 0, 2, 3])
-            label = tf.transpose(label, perm=[1, 0, 2, 3])
+        This augmentation suite enhances robustness against scanner variation,
+        acquisition artifacts, contrast differences, and resolution mismatches across
+        diverse clinical datasets (e.g., MSD tasks).
 
+        ─────────────────────────────────────────────────────────────────────────────
+        MRI Augmentations (Multi-Modal, Per-Channel)
+        ─────────────────────────────────────────────────────────────────────────────
+        • Independent brightness & contrast perturbation applied per modality channel
+        • Global intensity perturbations also applied (reflecting scanner calibration shifts)
+        • Optional Gaussian blur simulates lower spatial resolution acquisitions
+        • Optional Gaussian noise mimics thermal/electronic noise
+
+        Operations (each randomized via probability sampling):
+            - Random brightness shift    (per-channel + global)
+            - Random contrast scaling    (per-channel + global)
+            - Gamma curve modulation     (non-linear intensity remapping)
+            - Gaussian noise injection   (z-score compatible)
+            - 3D Gaussian blurring       (downsampling effect simulation)
+
+        ─────────────────────────────────────────────────────────────────────────────
+        CT Augmentations (HU-Aware, Tissue-Preserving)
+        ─────────────────────────────────────────────────────────────────────────────
+        • Gentler perturbation ranges due to fixed physical HU intensities
+        • Automatically skips air-only patches to avoid synthetic artifacts
+
+        Includes:
+            - Soft brightness shift
+            - Soft contrast adjustment
+            - Reduced Gaussian noise
+            - Gentle gamma transformation
+            - Optional blur
+
+        ─────────────────────────────────────────────────────────────────────────────
+        Compatibility
+        ─────────────────────────────────────────────────────────────────────────────
+        ✓ Works exclusively on **z-score normalized** inputs
+        ✓ Patch-wise execution inside tf.data pipeline (fully graph-safe)
+        ✓ Leaves label tensors untouched and perfectly aligned
+
+        Args:
+            image (tf.Tensor):
+                Input normalized patch volume (D, H, W, C).
+            label (tf.Tensor):
+                Corresponding segmentation patch (returned unchanged).
+
+        Returns:
+            Tuple[tf.Tensor, tf.Tensor]:
+                - Augmented image patch with identical dtype and shape
+                - Original, unmodified label patch
+
+        Note:
+            Intensity augmentations must be applied **after normalization** and
+            **after patch sampling** for consistency with nnU-Net training dynamics.
+        """
+        dtype = image.dtype
+        image = tf.cast(image, tf.float32)
+        num_channels = tf.shape(image)[-1]
+        
+        if self.config['data']['modality'] == 'MRI':
+
+            def augment_per_channel(img):
+                channels = tf.unstack(img, axis=-1)
+                augmented_channels = []
+                
+                for ch in channels:
+                    ch = ch[..., tf.newaxis]  
+                    
+
+                    ch = tf.cond(
+                        tf.random.uniform(()) > 0.5,
+                        lambda: ch + tf.random.uniform((), -0.1, 0.1),
+                        lambda: ch
+                    )
+                    
+
+                    ch = tf.cond(
+                        tf.random.uniform(()) > 0.5,
+                        lambda: self._apply_contrast(ch, 0.75, 1.25),
+                        lambda: ch
+                    )
+                    
+                    augmented_channels.append(ch[..., 0])
+                
+                return tf.stack(augmented_channels, axis=-1)
+            
+
+            image = tf.cond(
+                tf.random.uniform(()) > 0.5,
+                lambda: augment_per_channel(image),
+                lambda: image
+            )
+            
+
+            image = tf.cond(
+                tf.random.uniform(()) > 0.5,
+                lambda: image + tf.random.uniform((), -0.1, 0.1),
+                lambda: image
+            )
+            
+
+            image = tf.cond(
+                tf.random.uniform(()) > 0.5,
+                lambda: self._apply_contrast(image, 0.8, 1.2),
+                lambda: image
+            )
+            
+
+            image = tf.cond(
+                tf.random.uniform(()) > 0.7,
+                lambda: image + tf.random.normal(tf.shape(image), stddev=0.05, dtype=tf.float32),
+                lambda: image
+            )
+            
+
+            image = tf.cond(
+                tf.random.uniform(()) > 0.5,
+                lambda: self._apply_gamma(image, 0.7, 1.5),
+                lambda: image
+            )
+            
+
+            image = tf.cond(
+                tf.random.uniform(()) > 0.8,
+                lambda: self._apply_gaussian_blur_3d(image),
+                lambda: image
+            )
+            
+        elif self.config['data']['modality'] == 'CT':
+
+            intensity_range = tf.reduce_max(image) - tf.reduce_min(image)
+            
+            def augment_ct(img):
+
+                img = tf.cond(
+                    tf.random.uniform(()) > 0.5,
+                    lambda: img + tf.random.uniform((), -0.05, 0.05),
+                    lambda: img
+                )
+                
+
+                img = tf.cond(
+                    tf.random.uniform(()) > 0.5,
+                    lambda: self._apply_contrast(img, 0.9, 1.1),
+                    lambda: img
+                )
+                
+
+                img = tf.cond(
+                    tf.random.uniform(()) > 0.7,
+                    lambda: img + tf.random.normal(tf.shape(img), stddev=0.02, dtype=tf.float32),
+                    lambda: img
+                )
+                
+
+                img = tf.cond(
+                    tf.random.uniform(()) > 0.5,
+                    lambda: self._apply_gamma(img, 0.9, 1.1),
+                    lambda: img
+                )
+                
+
+                img = tf.cond(
+                    tf.random.uniform(()) > 0.8,
+                    lambda: self._apply_gaussian_blur_3d(img),
+                    lambda: img
+                )
+                
+                return img
+            
+
+            image = tf.cond(
+                intensity_range < 0.1,
+                lambda: image,
+                lambda: augment_ct(image)
+            )
+        
+        return tf.cast(image, dtype), label
+    
+    
+
+    
+    def _apply_contrast(self, image, lower, upper):
+        """Apply contrast augmentation around the mean."""
+        factor = tf.random.uniform((), lower, upper)
+        mean = tf.reduce_mean(image, axis=[0, 1, 2], keepdims=True)
+        return (image - mean) * factor + mean
+    
+    def _apply_gamma(self, image, gamma_min, gamma_max):
+        """Apply gamma correction to z-score normalized data."""
+        img_min = tf.reduce_min(image)
+        img_max = tf.reduce_max(image)
+        img_range = tf.maximum(img_max - img_min, 1e-6)
+        
+
+        image_01 = (image - img_min) / img_range
+        
+
+        gamma = tf.random.uniform((), gamma_min, gamma_max)
+        image_01 = tf.math.pow(image_01, gamma)
+        
+
+        return image_01 * img_range + img_min
+    
+    def _apply_gaussian_blur_3d(self, image, sigma_range=(0.5, 1.0)):
+        """
+        Apply 3D Gaussian blur using separable 2D convolutions per slice.
+        Simulates lower resolution acquisitions.
+        """
+        sigma = tf.random.uniform((), sigma_range[0], sigma_range[1])
+        
+
+        kernel_radius = tf.cast(tf.math.ceil(sigma * 2), tf.int32)
+        kernel_size = kernel_radius * 2 + 1
+        
+        x = tf.cast(tf.range(-kernel_radius, kernel_radius + 1), tf.float32)
+        kernel_1d = tf.exp(-x**2 / (2 * sigma**2))
+        kernel_1d = kernel_1d / tf.reduce_sum(kernel_1d)
+        
+
+        kernel_2d = tf.tensordot(kernel_1d, kernel_1d, axes=0)  
+        kernel_2d = kernel_2d[:, :, tf.newaxis, tf.newaxis]  
+        
+
+        num_channels = tf.shape(image)[-1]
+        
  
+        def blur_single_channel(channel_idx):
 
-        # along yz
-        if tf.random.uniform(())>0.5: 
+            channel = image[:, :, :, channel_idx]
+            
 
+            channel_4d = channel[:, :, :, tf.newaxis]  
+            
 
-            image = tf.transpose(image, perm=[2, 1, 0, 3])
-            label = tf.transpose(label, perm=[2, 1, 0, 3])
-            augmented = self.rotator({
-                'images': image, 
-                'segmentation_masks': label
-            })
-            aug_image, aug_label = augmented['images'], augmented['segmentation_masks']
-
-            image = tf.cast(aug_image, image.dtype)
-            label = tf.cast(aug_label, label.dtype)
-
-            image = tf.transpose(image, perm=[2, 1, 0, 3])
-            label = tf.transpose(label, perm=[2, 1, 0, 3])
-
-        # zoom 
-        # along xy plan 
-
-        if tf.random.uniform(())>0.5: 
-
-            augmented = self.zoomer({
-                    'images': image , 
-                    'segmentation_masks': label
-                })
-            aug_image ,aug_label = augmented['images'], augmented['segmentation_masks']
-            image = tf.cast(aug_image, image.dtype)
-            label = tf.cast(aug_label, label.dtype)
-        # along xz
-        if tf.random.uniform(())>0.5: 
-            image = tf.transpose(image, perm=[1, 0, 2, 3])
-            label = tf.transpose(label, perm=[1, 0, 2, 3])
-            augmented = self.zoomer({
-                    'images': image , 
-                    'segmentation_masks': label
-                })
-            aug_image ,aug_label = augmented['images'], augmented['segmentation_masks']
-
-            image = tf.cast(aug_image, image.dtype)
-            label = tf.cast(aug_label, label.dtype)
-
-            image = tf.transpose(image, perm=[1, 0, 2, 3])
-            label = tf.transpose(label, perm=[1, 0, 2, 3])
-
-
-        # along yz
-        if tf.random.uniform(())>0.5: 
-
-            image = tf.transpose(image, perm=[2, 1, 0, 3])
-            label = tf.transpose(label, perm=[2, 1, 0, 3])
-            augmented = self.zoomer({
-                'images': image, 
-                'segmentation_masks': label
-            })
-            aug_image, aug_label = augmented['images'], augmented['segmentation_masks']
-
-            image = tf.cast(aug_image, image.dtype)
-            label = tf.cast(aug_label, label.dtype)
-
-            image = tf.transpose(image, perm=[2, 1, 0, 3])
-            label = tf.transpose(label, perm=[2, 1, 0, 3])
-
+            blurred = tf.nn.conv2d(
+                channel_4d,
+                kernel_2d,
+                strides=[1, 1, 1, 1],
+                padding='SAME'
+            )
+            
+            return blurred[:, :, :, 0]  
         
-        # elastic_deformation 
-        image_dtype = image.dtype
-        label_dtype = label.dtype
-        if tf.random.uniform(())>0.5: 
-            image , label = self.randomElasticDeformation3D(image , label)
-            image = tf.cast(image, image_dtype)
-            label = tf.cast(label, label_dtype)
-        return image , label 
 
-    def _intensity_augmentations(self , image,label ):
-        """
-        Applies a sequence of random, in-graph 3D intensity augmentations to a
-        single patch.
+        blurred_channels = tf.map_fn(
+            blur_single_channel,
+            tf.range(num_channels),
+            fn_output_signature=tf.TensorSpec(shape=[None, None, None], dtype=image.dtype)
+        )
+        
 
-        This method follows the SOTA nnU-Net augmentation suite, making the model
-        robust to variations in scanner brightness, contrast, and noise. All
-        operations are native TensorFlow, ensuring a high-performance pipeline.
-        The label is passed through unmodified.
-
-        Args:
-            image (tf.Tensor): The 4D input image patch (D, H, W, C).
-            label (tf.Tensor): The 4D input label patch (D, H, W, C).
-
-        Returns:
-            Tuple[tf.Tensor, tf.Tensor]: A tuple containing the augmented image
-            patch and the original, unmodified label patch.
-        """
-        min_value = tf.reduce_min(image , axis =[0,1,2] , keepdims=True)
-        max_value  =tf.reduce_max(image , axis = [0,1,2] , keepdims=True)
-        if self.config['data']['modality']=='MRI':
-            min_max_normalized_image = (image - min_value)/(max_value-min_value + 1e-8)
-
-        elif (self.config['data']['modality']) =='CT':
-            min_max_normalized_image = tf.clip_by_value(image , clip_value_min=self.config['data']['modality']['CT']['clip_value_min'] ,clip_value_max=self.config['data']['modality']['CT']['clip_value_max'])
-            min_value = tf.reduce_min(min_max_normalized_image , axis = [0,1,2] , keepdims=True)
-            max_value = tf.reduce_max(min_max_normalized_image ,axis =[0,1,2] , keepdims=True)
-            min_max_normalized_image = (min_max_normalized_image-min_value)/(max_value-min_value+1e-8)
-
-        image = tf.image.random_brightness(min_max_normalized_image , max_delta=0.1)
-        image = tf.image.random_contrast(image, lower=0.7 , upper=1.1)
-        Gaussian_noise = tf.random.normal((tf.shape(image)),stddev=0.1 , dtype = image.dtype)
-        image = image + Gaussian_noise
-        gama_value = tf.random.uniform(() , minval=0.7 , maxval=1.5 ,  dtype=image.dtype)
-        image = tf.clip_by_value(image, 0.0, 1.0)
-        image = tf.math.pow(image , gama_value)
-        image = tf.clip_by_value(image ,clip_value_min=0.0 , clip_value_max=1.0 )
-
-        mean = tf.math.reduce_mean(image ,axis=[0, 1, 2], keepdims=True)
-        std  = tf.math.reduce_std(image , axis=[0, 1, 2], keepdims=True)
-        image  = (image-mean)/(std + 1e-6)
-
-        return image , label
+        blurred_image = tf.transpose(blurred_channels, perm=[1, 2, 3, 0])
+        
+        return blurred_image
 
     def _pad_volumes(self, image_volume, label_volume):
         """
@@ -1320,38 +1653,176 @@ class DataPipeline :
 
         return padded_image, padded_label
     
-    def _val_normalization(self, image , label) : 
+    def normalization(self, image, label):
         """
-        Applies a standardized normalization to the validation and test data.
+        Applies State-of-the-Art (SOTA) intensity normalization for 3D medical imaging,
+        following the official nnU-Net preprocessing pipeline.
 
-        This ensures that the model sees data in the same distribution as the
-        training data, but without any stochastic augmentations.
+        This method ensures modality-specific normalization that is robust to scanner
+        variation, multi-center data distribution shifts, and background bias.
+
+        ─────────────────────────────────────────────────────────────────────────────
+        MRI Normalization (Multi-modal, Foreground-Only Z-Score)
+        ─────────────────────────────────────────────────────────────────────────────
+        • Applied **per-channel** (T1, T2, FLAIR, etc.)
+        • Statistics (mean, std) computed **only inside the foreground mask**
+        (non-zero voxels), ignoring background air
+        • Prevents background-dominant intensity collapse and preserves tumor contrast
+
+        Formula (for each channel):
+            fg_mask = (I > 0)
+            μ_fg = mean(I * fg_mask)
+            σ_fg = std(I * fg_mask)
+            I_norm = (I - μ_fg) / (σ_fg + ε)
+
+        ─────────────────────────────────────────────────────────────────────────────
+        CT Normalization (HU-Clipping + Global Z-Score)
+        ─────────────────────────────────────────────────────────────────────────────
+        • Clip Hounsfield Units to a physiologically meaningful soft-tissue range
+        • Compute global mean/std (HU values are standardized across scanners)
+        • Normalization keeps liver/organ tissue intact while removing bone/air extremes
+
+        Formula:
+            I_clip = clip(I, HU_min, HU_max)
+            I_norm = (I_clip - mean(I_clip)) / (std(I_clip) + ε)
+
+        ─────────────────────────────────────────────────────────────────────────────
+        Output Distribution & Model Stability
+        ─────────────────────────────────────────────────────────────────────────────
+        ✓ Output intensities approximately follow N(0, 1)
+        ✓ Improves inter-subject consistency
+        ✓ Avoids intensity scale drift during training
+        ✓ Required for correct response to intensity-based augmentations
 
         Args:
-            image (tf.Tensor): The 4D input image patch (D, H, W, C).
-            label (tf.Tensor): The 4D input label patch (D, H, W, C).
+            image (tf.Tensor):  
+                4D tensor (D, H, W, C) of raw voxel intensities.
+            label (tf.Tensor):  
+                Corresponding 4D segmentation mask (returned unchanged).
 
         Returns:
-            Tuple[tf.Tensor, tf.Tensor]: A tuple containing the normalized
-            image patch and the original label patch.
+            Tuple[tf.Tensor, tf.Tensor]:
+                Normalized image tensor with same shape and dtype as input,
+                and the unmodified label mask.
+
+        Note:
+            This normalization must be performed **once per full volume**, before
+            patch extraction and before any intensity augmentation.
         """
-        min_value = tf.reduce_min(image , axis = [0,1,2] , keepdims=True )
-        max_value  =tf.reduce_max(image , axis =[0,1,2] ,  keepdims=True)
-        if self.config['data']['modality']=='MRI':
-            min_max_normalized_image = (image - min_value)/(max_value-min_value + 1e-8)
+        dtype = image.dtype
+        image = tf.cast(image, tf.float32)
+        
 
-        elif (self.config['data']['modality']) =='CT':
-            min_max_normalized_image = tf.clip_by_value(image , clip_value_min=self.config['data']['modality']['CT']['clip_value_min'] ,clip_value_max=self.config['data']['modality']['CT']['clip_value_max'])
-            min_value = tf.reduce_min(min_max_normalized_image , axis =[0,1,2] , keepdims=True)
-            max_value = tf.reduce_max(min_max_normalized_image , axis =  [0,1,2] , keepdims=True)
-            min_max_normalized_image = (min_max_normalized_image-min_value)/(max_value-min_value+1e-8)
+        image = tf.where(tf.math.is_nan(image), tf.zeros_like(image), image)
+        
+        if self.config['data']['modality'] == 'MRI':
+
+            
+            def normalize_channel(channel):
+                """Z-score normalize using foreground voxels only."""
+
+                fg_mask = tf.cast(tf.not_equal(channel, 0), tf.float32)
+                num_fg = tf.reduce_sum(fg_mask) + 1e-8
+                
+
+                fg_mean = tf.reduce_sum(channel * fg_mask) / num_fg
+                
+
+                fg_var = tf.reduce_sum(((channel - fg_mean) ** 2) * fg_mask) / num_fg
+                fg_std = tf.sqrt(fg_var + 1e-8)
+                
+
+                normalized = (channel - fg_mean) / fg_std
+                return normalized
+            
+
+            channels = tf.unstack(image, axis=-1)
+            normalized_channels = [normalize_channel(ch) for ch in channels]
+            image = tf.stack(normalized_channels, axis=-1)
+            
+        elif self.config['data']['modality'] == 'CT':
+
+            
+            image = tf.clip_by_value(
+                image,
+                float(self.config['data']['CT_clip_value_min']),
+                float(self.config['data']['CT_clip_value_max'])
+            )
+            
+
+            mean = tf.reduce_mean(image)
+            std = tf.math.reduce_std(image)
+            image = (image - mean) / (std + 1e-8)
+        
+        return tf.cast(image, dtype), label
+
+    # def clean_liver_duplicates(self ):
+    #     """
+    #     Graph-safe version of duplicate file cleanup for Task03_Liver.
+    #     Uses tf.io.gfile instead of os for filesystem operations.
+    #     Can run in both eager and graph mode safely.
+    #     """
+
+    #     image_path = tf.convert_to_tensor(self.image_address)
 
 
-        mean = tf.math.reduce_mean(min_max_normalized_image ,axis=[0, 1, 2], keepdims=True)
-        std  = tf.math.reduce_std(min_max_normalized_image , axis=[0, 1, 2], keepdims=True)
-        image  = (min_max_normalized_image-mean)/(std + 1e-6)
+    #     tf.print("🧹 Cleaning duplicate modality files for Task03_Liver...")
 
-        return image , label 
+
+    #     file_list = tf.io.gfile.listdir(image_path)
+
+    #     deleted = tf.Variable(0, dtype=tf.int32)
+
+
+    #     for fname in file_list:
+    #         if fname.endswith("_0001.nii.gz"):
+    #             file_path = tf.strings.join([image_path, "/", fname])
+    #             try:
+    #                 tf.io.gfile.remove(file_path)
+    #                 deleted.assign_add(1)
+    #             except tf.errors.NotFoundError:
+    #                 tf.print("⚠️ File not found:", fname)
+    #             except tf.errors.PermissionDeniedError:
+    #                 tf.print("⚠️ Permission denied:", fname)
+
+    #     tf.print("✅ Removed", deleted, "duplicate files from", image_path)
+
+    def clean_liver_duplicates(self):
+        """
+        Removes redundant *_0001.nii.gz files in Task03_Liver/imagesTr and labelsTr.
+        Ensures both directories have matching 131 volumes.
+        Runs once during pipeline initialization (outside TensorFlow graph).
+        """
+
+
+
+        print("🧹 Cleaning duplicate modality files for Task03_Liver...")
+
+        deleted_images = 0
+        deleted_labels = 0
+
+
+        for fname in os.listdir(self.image_address):
+            if fname.endswith("_0001.nii.gz"):
+                file_path = os.path.join(self.image_address, fname)
+                try:
+                    os.remove(file_path)
+                    deleted_images += 1
+                except Exception as e:
+                    print(f"⚠️ Could not delete image {fname}: {e}")
+
+
+        for fname in os.listdir(self.label_address):
+            if fname.endswith("_0001.nii.gz"):
+                file_path = os.path.join(self.label_address, fname)
+                try:
+                    os.remove(file_path)
+                    deleted_labels += 1
+                except Exception as e:
+                    print(f"⚠️ Could not delete label {fname}: {e}")
+
+        print(f"✅ Removed {deleted_images} duplicate images and {deleted_labels} duplicate labels.")
+
 
 
     def _remap_labels(self, image, label):
@@ -1389,8 +1860,8 @@ class DataPipeline :
         train_dataset = tf.data.Dataset.from_generator(
             self.genrator.train_data_genrator , 
             output_types=(tf.float32 , tf.int32) , 
-            output_shapes = (tf.TensorShape(list(self.config['data']['image_shape'])),
-                             tf.TensorShape(list(self.config['data']['label_shape']))
+            output_shapes = (tf.TensorShape([None, None, None, self.config['data']['image_shape'][-1]]),
+                             tf.TensorShape([None, None, None, self.config['data']['label_shape'][-1]])
                              )                                           
                             )
         options = tf.data.Options()
@@ -1402,11 +1873,15 @@ class DataPipeline :
         train_dataset = train_dataset.map(self.genrator.cast , num_parallel_calls=tf.data.AUTOTUNE)
         if int(self.config['task']) == 1 : 
             train_dataset = train_dataset.map(self._remap_labels ,num_parallel_calls=tf.data.AUTOTUNE )
+        train_dataset = train_dataset.map(self.normalization ,num_parallel_calls=tf.data.AUTOTUNE )
         train_dataset = train_dataset.cache()
         train_dataset = train_dataset.map(self._geometric_augmentations  , num_parallel_calls=tf.data.AUTOTUNE)
-        train_dataset = train_dataset.map(self._pad_volumes , num_parallel_calls=tf.data.AUTOTUNE)
-        train_dataset = train_dataset.map(lambda image , label  : self.patch_sampler.sample(image, label ,stage ) , num_parallel_calls=tf.data.AUTOTUNE)
-        train_dataset = train_dataset.unbatch()
+
+        if self.config['data']['image_patch'] : 
+            train_dataset = train_dataset.map(self._pad_volumes , num_parallel_calls=tf.data.AUTOTUNE)
+            train_dataset = train_dataset.map(lambda image , label  : self.patch_sampler.sample(image, label ,stage ) , num_parallel_calls=tf.data.AUTOTUNE)
+            train_dataset = train_dataset.unbatch()
+
         train_dataset = train_dataset.map(self._intensity_augmentations , num_parallel_calls=tf.data.AUTOTUNE)
         train_dataset= train_dataset.shuffle(buffer_size=100).batch(self.final_batch_size , drop_remainder=True)
         train_dataset = train_dataset.prefetch(buffer_size=tf.data.AUTOTUNE)
@@ -1414,9 +1889,9 @@ class DataPipeline :
         val_dataset = tf.data.Dataset.from_generator(
             self.genrator.val_data_genrator ,
             output_types=(tf.float32 , tf.int32) , 
-            output_shapes = (tf.TensorShape(list(self.config['data']['image_shape'])),
-                             tf.TensorShape(list(self.config['data']['label_shape']))
-                             )                                                       
+            output_shapes = (tf.TensorShape([None, None, None, self.config['data']['image_shape'][-1]]),
+                             tf.TensorShape([None, None, None, self.config['data']['label_shape'][-1]])
+                             )                                                          
                             ) 
         options = tf.data.Options()
         options.experimental_deterministic = False
@@ -1427,11 +1902,15 @@ class DataPipeline :
         val_dataset = val_dataset.map(self.genrator.cast, num_parallel_calls=tf.data.AUTOTUNE)
         if int(self.config['task']) == 1 : 
             val_dataset = val_dataset.map(self._remap_labels ,num_parallel_calls=tf.data.AUTOTUNE )
+        val_dataset = val_dataset.map(self.normalization ,num_parallel_calls=tf.data.AUTOTUNE )
         val_dataset = val_dataset.cache()
-        val_dataset = val_dataset.map(self._pad_volumes , num_parallel_calls=tf.data.AUTOTUNE)
-        val_dataset = val_dataset.map(self.patch_sampler.extract_val_patch , num_parallel_calls=tf.data.AUTOTUNE)
-        val_dataset = val_dataset.unbatch()
-        val_dataset = val_dataset.map(self._val_normalization , num_parallel_calls=tf.data.AUTOTUNE)
+
+        if self.config['data']['image_patch'] : 
+            val_dataset = val_dataset.map(self._pad_volumes , num_parallel_calls=tf.data.AUTOTUNE)
+    #        val_dataset = val_dataset.map(self.patch_sampler.extract_val_patch , num_parallel_calls=tf.data.AUTOTUNE)
+            val_dataset = val_dataset.map(lambda image , label  : self.patch_sampler.sample(image, label ,stage ) , num_parallel_calls=tf.data.AUTOTUNE)
+            val_dataset = val_dataset.unbatch()
+        # val_dataset = val_dataset.map(self._val_normalization , num_parallel_calls=tf.data.AUTOTUNE)
         val_dataset= val_dataset.batch(self.final_batch_size , drop_remainder=True)
         val_dataset = val_dataset.prefetch(buffer_size=tf.data.AUTOTUNE)
 

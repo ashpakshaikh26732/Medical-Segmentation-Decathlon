@@ -41,10 +41,17 @@ class DiceLoss3D(tf.keras.losses.Loss):
         numerator = 2.0 * intersection + epsilon
         denominator = sum_true + sum_pred + epsilon
         
-        dice_score_per_class = numerator / denominator
+#        dice_score_per_class = numerator / denominator
         
+        #change 
+        dice_score_per_class = tf.math.divide_no_nan(numerator, denominator) 
+
  
-        weighted_dice_score = tf.reduce_sum(dice_score_per_class * self.class_weights) / tf.reduce_sum(self.class_weights)
+#        weighted_dice_score = tf.reduce_sum(dice_score_per_class * self.class_weights) / tf.reduce_sum(self.class_weights)
+
+        weighted_dice_score = tf.math.divide_no_nan( tf.reduce_sum(dice_score_per_class * self.class_weights) , tf.reduce_sum(self.class_weights)) 
+	
+	#change over 
         
         return 1.0 - weighted_dice_score
 

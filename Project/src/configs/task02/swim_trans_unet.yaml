@@ -1,0 +1,77 @@
+#this yaml file for task01 swimtransunet model
+task: 2
+
+model:
+    name : 'swin_transunet'
+    use_checkpointing: True 
+    bottleneck:
+        dim: 512 
+        depth: 4 
+        window_shape: [4, 4, 4] 
+        num_heads: 8
+        shift_size: [2, 2, 2]
+        
+
+data:
+  modality: "MRI"
+  CT_clip_value_min: -150
+  CT_clip_value_max: 250
+  val_count: 2
+  train_count: 18
+  num_classes: 2
+  batch: 2
+  num_replicas: 8
+  image_shape: [320, 320, 115, 1]
+  label_shape: [320, 320, 115, 1]
+  image_patch_shape: [80, 80, 52, 1]
+  label_patch_shape: [80, 80, 52, 1]
+  stage_patches_per_volume: 32
+  stage1_fg_ratio: 0.5
+  stage2_fg_ratio: 0.5
+  stage3_fg_ratio: 0.4375
+  stage3_hard_sample_ratio: 0.125
+  #stage2_intra_class_ratio : [0.128 , 0.461 , 0.411 ]
+  stage2_intra_class_ratio: [1.0]
+  vis: 1
+  aws : True 
+  image_patch : True 
+  target_spacing : [1.25 ,1.25 , 1.37]
+
+  num_patches: 27
+  dataset_url: "https://msd-for-monai.s3-us-west-2.amazonaws.com/Task02_Heart.tar"
+  tarfile_name: "Task02_Heart.tar"
+  class_names: ["BackGround", "Left Atrium"]
+#  class_weights: [1.0, 247.71]
+  class_weights: [1.0, 1.0]
+  output_weights: [0.125, 0.25, 0.5, 1.0]
+  loss_weights: [1.0, 1.5]
+checkpoint:
+  #checkpoint_dir : 'gs://medical_segmentation_decathlon/task01/unet_pp/checkpoints'
+  local_checkpoint_dir: "/kaggle/working/checkpoints/swimtransunet/"
+  
+  hf_repo_id: "ashpakshaikh26732/msd" 
+  hf_path_in_repo: "task02/swimtransunet/checkpoints"
+
+  artifact_name : 'task_02_swimtransunet_checkpoints'
+  total_step: 7200
+  warmup_step: 10
+  target_lr: 1e-4
+  min_delta: 1e-4
+  patiance: 15
+  batches_per_epoch: 36
+  total_epoch: 200
+  log_dir: "task02/swimtransunet/logs"
+  stage_2_epoch: 76
+  stage_3_epoch: 200
+  ohem_call_duration: 5
+  duration_to_save_checkpoints : 5 
+  #checkpoint_path: "gs://medical_segmentation_decathlon/task01/unet_pp/checkpoints_new/ckpt-178"
+  # checkpoint_path: "/kaggle/input/unetpp-ckpt-178-final/ckpt-178"
+optimizer:
+  starting_lr: 1e-4
+  weight_decay: 1e-5
+
+loss: "sementic_segmetation_loss"
+
+debugger:
+  debugger: "gs://medical_segmentation_decathlon/task01/unet_pp/debugger"

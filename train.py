@@ -143,14 +143,58 @@ loss_registry = {
 'sementic_segmetation_loss' : Sementic_segmentation_loss,
 'deep_supervision_loss' : DeepSupervisionLoss3D
 }
+if bool(config['data']['aws']) : 
+    download_and_extract(config['data']['dataset_url'], output_dir="/kaggle/working/", tarfile_name=config['data']['tarfile_name'])
+    task_name = os.path.splitext(config['data']['tarfile_name'])[0]
+    image_address  = os.path.join('/kaggle/working', task_name , 'imagesTr')
+    label_address = os.path.join('/kaggle/working',task_name , 'labelsTr')
+else : 
+    # part1 = config['data']['dataset_part1']
+    # part2 = config['data']['dataset_part2'] 
+    # combined_root = config['data']['combined_root'] 
 
-download_and_extract(config['data']['dataset_url'], output_dir="/kaggle/working/", tarfile_name=config['data']['tarfile_name'])
-task_name = os.path.splitext(config['data']['tarfile_name'])[0]
-image_address  = os.path.join('/kaggle/working', task_name , 'imagesTr')
-label_address = os.path.join('/kaggle/working',task_name , 'labelsTr')
+    # os.makedirs(combined_root, exist_ok=True) 
+    # os.makedirs(os.path.join(combined_root,'imagesTr') , exist_ok=True) 
+    # os.makedirs(os.path.join(combined_root , 'labelsTr') , exist_ok=True)
+
+    # def symlink_all(src_dir , dst_dir) : 
+    #     for fname in os.listdir(src_dir): 
+    #         src = os.path.join(src_dir , fname) 
+    #         dst = os.path.join(dst_dir , fname) 
+    #         if not os.path.exists(dst) : 
+    #             os.symlink(src,dst)
+    
+    # symlink_all(os.path.join(part1,'imagesTr') , os.path.join(combined_root,'imagesTr'))
+    # symlink_all(os.path.join(part2 , 'imagesTr') , os.path.join(combined_root, 'imagesTr'))
+    # symlink_all(os.path.join(part1 , 'labelsTr') , os.path.join(combined_root , 'labelsTr')) 
+    # symlink_all(os.path.join(part2  , 'labelsTr') , os.path.join(combined_root, 'labelsTr'))
+
+    # image_address = os.path.join(combined_root , 'imagesTr')
+    # label_address = os.path.join(combined_root , 'labelsTr')
+
+    # print("✅ Combined dataset ready at:", combined_root)
+    # print("📂 Total training images:", len(os.listdir(image_address)))
+    # print("📂 Total training labels:", len(os.listdir(label_address)))
+
+    part1 = config['data']['dataset_part1']
+    part2 = config['data']['dataset_part2']
 
 
+    image_address = []
+    label_address = []
 
+    for part in [part1, part2]:
+        img_dir = os.path.join(part, 'imagesTr')
+        lbl_dir = os.path.join(part, 'labelsTr')
+        
+        for fname in os.listdir(img_dir):
+            image_address.append(os.path.join(img_dir, fname))
+            
+        for fname in os.listdir(lbl_dir):
+            label_address.append(os.path.join(lbl_dir, fname))
+
+    print(f"Total images: {len(image_address)}")
+    print(f"Total labels: {len(label_address)}")
 
 
 with strategy.scope() :
@@ -408,6 +452,8 @@ for epoch in range(start ,  config['checkpoint']['total_epoch']):
             'per_class_dice_val' : val_dice_dict
         },
     }
+    
+
     per_class_iou.reset_state()
     per_class_dice.reset_state()
     per_class_iou_val.reset_state()
@@ -415,3 +461,4 @@ for epoch in range(start ,  config['checkpoint']['total_epoch']):
     stop_training = master_callback.on_epoch_end(epoch , data , val_dataset)
     if stop_training :
         break
+

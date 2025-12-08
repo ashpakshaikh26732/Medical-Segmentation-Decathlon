@@ -7,8 +7,6 @@ mixed_precision.set_global_policy("mixed_float16")
 repo_path = "/content/drive/MyDrive/Medical-Segmentation-Decathlon"
 sys.path.append(repo_path)
 
-
-
 class convolutional_Block(tf.keras.layers.Layer):
     def __init__(self, n_filters, block_name, n_layers=2, activation='relu', kernel_size=(3, 3, 3)):
         super().__init__()
@@ -57,20 +55,66 @@ class encoder(tf.keras.models.Model):
         return (f1, f2, f3, f4), (p1, p2, p3, p4)
 
 class Decoder_Block(tf.keras.layers.Layer):
-    def __init__(self , filters , block_name , dropout = 0.3) :
+    def __init__(self, filters, block_name, dropout=0.3):
         super().__init__()
-        self.conv_layer =  convolutional_Block(filters , block_name)
-        self.conv_tranpose = tf.keras.layers.Conv3DTranspose(filters = filters , kernel_size=(2,2,2) , strides=(2,2,2) , padding='same' , activation='relu')
-        self.dropout=tf.keras.layers.Dropout(rate = dropout)
+        self.conv_layer = convolutional_Block(filters, block_name)
+        self.conv_tranpose = tf.keras.layers.Conv3DTranspose(
+            filters=filters, kernel_size=(2, 2, 2), strides=(2, 2, 2), 
+            padding='same', activation='relu'
+        )
+        self.dropout = tf.keras.layers.Dropout(rate=dropout)
         self.concat = tf.keras.layers.Concatenate()
 
     def call(self, conv, inputs):
         u = self.conv_tranpose(inputs)
 
-        # Crop if shapes do not match (common issue in U-Nets)
-        if u.shape[1:4] != conv.shape[1:4]:
-            conv_shape = tf.shape(conv)
-            u = u[:, :conv_shape[1], :conv_shape[2], :conv_shape[3], :]
+        # OPTIMIZED FOR TPU: Try static shape check first
+        u_shape = u.shape
+        conv_shape = conv.shape
+        
+        # Only use dynamic graph logic if static shapes are unknown
+        if (u_shape[1] is not None and conv_shape[1] is not None and
+            u_shape[2] is not None and conv_shape[2] is not None and
+            u_shape[3] is not None and conv_shape[3] is not None):
+            
+            pad_d = conv_shape[1] - u_shape[1]
+            pad_h = conv_shape[2] - u_shape[2]
+            pad_w = conv_shape[3] - u_shape[3]
+            
+            if pad_d > 0 or pad_h > 0 or pad_w > 0:
+                u = tf.pad(u, [
+                    [0, 0],
+                    [0, max(pad_d, 0)],
+                    [0, max(pad_h, 0)],
+                    [0, max(pad_w, 0)],
+                    [0, 0]
+                ])
+            # If static shapes match or u is larger, we assume it's correct or use static slicing
+            # Usually upsampling matches exactly with powers of 2 patches.
+            if pad_d < 0 or pad_h < 0 or pad_w < 0:
+                 u = u[:, :conv_shape[1], :conv_shape[2], :conv_shape[3], :]
+                 
+        else:
+            # Fallback to dynamic shapes (May fail on TPU if shapes change)
+            u_dynamic_shape = tf.shape(u)
+            conv_dynamic_shape = tf.shape(conv)
+            pad_d = conv_dynamic_shape[1] - u_dynamic_shape[1]
+            pad_h = conv_dynamic_shape[2] - u_dynamic_shape[2]
+            pad_w = conv_dynamic_shape[3] - u_dynamic_shape[3]
+            
+            u = tf.cond(
+                tf.logical_or(tf.logical_or(pad_d > 0, pad_h > 0), pad_w > 0),
+                lambda: tf.pad(u, [
+                    [0, 0],
+                    [0, tf.maximum(pad_d, 0)],
+                    [0, tf.maximum(pad_h, 0)],
+                    [0, tf.maximum(pad_w, 0)],
+                    [0, 0]
+                ]),
+                lambda: u
+            )
+            # Dynamic crop
+            u = u[:, :conv_dynamic_shape[1], :conv_dynamic_shape[2], :conv_dynamic_shape[3], :]
 
         c = self.concat([u, conv])
         c = self.dropout(c)
@@ -79,12 +123,33 @@ class Decoder_Block(tf.keras.layers.Layer):
 
 
 def pad_if_needed(x, window_shape):
+    # OPTIMIZED FOR TPU: Check static shape first to avoid tf.cond
+    static_shape = x.shape
+    if (static_shape[1] is not None and 
+        static_shape[2] is not None and 
+        static_shape[3] is not None):
+        
+        D, H, W = static_shape[1], static_shape[2], static_shape[3]
+        pad_d = (window_shape[0] - D % window_shape[0]) % window_shape[0]
+        pad_h = (window_shape[1] - H % window_shape[1]) % window_shape[1]
+        pad_w = (window_shape[2] - W % window_shape[2]) % window_shape[2]
+        
+        if pad_d == 0 and pad_h == 0 and pad_w == 0:
+            # No padding needed, return original tensor and 0 pads
+            return x, (0, 0, 0)
+        
+        # Static padding
+        paddings = [[0, 0], [0, pad_d], [0, pad_h], [0, pad_w], [0, 0]]
+        return tf.pad(x, paddings), (pad_d, pad_h, pad_w)
+
+    # Fallback to dynamic logic (only if shapes are truly unknown at compile time)
     shape = tf.shape(x)
     B, D, H, W, C = shape[0], shape[1], shape[2], shape[3], shape[4]
     pad_d = (window_shape[0] - D % window_shape[0]) % window_shape[0]
     pad_h = (window_shape[1] - H % window_shape[1]) % window_shape[1]
     pad_w = (window_shape[2] - W % window_shape[2]) % window_shape[2]
     paddings = [[0, 0], [0, pad_d], [0, pad_h], [0, pad_w], [0, 0]]
+    
     x = tf.cond(
         tf.logical_or(tf.logical_or(pad_d > 0, pad_h > 0), pad_w > 0),
         lambda: tf.pad(x, paddings),
@@ -94,6 +159,17 @@ def pad_if_needed(x, window_shape):
 
 def unpad_if_needed(x, pads):
     pad_d, pad_h, pad_w = pads
+    
+    # OPTIMIZED FOR TPU: Check if pads are static integers
+    if isinstance(pad_d, int) and isinstance(pad_h, int) and isinstance(pad_w, int):
+        if pad_d == 0 and pad_h == 0 and pad_w == 0:
+            return x
+        # Static slice
+        # Use tf.shape(x) for the dynamic upper bound if needed, 
+        # or just standard slicing if x has static shape.
+        return x[:, :tf.shape(x)[1]-pad_d, :tf.shape(x)[2]-pad_h, :tf.shape(x)[3]-pad_w, :]
+
+    # Fallback to dynamic
     x = tf.cond(
         tf.logical_or(tf.logical_or(tf.greater(pad_d, 0), tf.greater(pad_h, 0)), tf.greater(pad_w, 0)),
         lambda: x[:, :tf.shape(x)[1]-pad_d, :tf.shape(x)[2]-pad_h, :tf.shape(x)[3]-pad_w, :],
@@ -141,9 +217,13 @@ class SwinTransformer(tf.keras.layers.Layer):
         shortcut = x
         shape = tf.shape(x)
         B, D, H, W, C = shape[0], shape[1], shape[2], shape[3], shape[4]
+        
         x, pads = pad_if_needed(x, self.window_shape)
+        
+        # Recalculate shape after potential padding
         padded_shape = tf.shape(x)
         padded_D, padded_H, padded_W = padded_shape[1], padded_shape[2], padded_shape[3]
+        
         x = self.norm1(x)
         x = windows_partition(x, self.window_shape)
         x = self.attn(x, x)
@@ -198,34 +278,73 @@ class SwinTransformerBottleneck(tf.keras.layers.Layer):
         return x
 
 class HybridDecoder(tf.keras.models.Model):
-    def __init__(self , config) :
+    def __init__(self, config):
         super().__init__()
         num_classes = config['data']['num_classes']
         self.SwinTransformer = SwinTransformerBottleneck(config)
-        self.Decoder_Block1 = Decoder_Block(256 , "decoder_block_256")
-        self.Decoder_Block2 = Decoder_Block(128,'decoder_block_128')
-        self.Decoder_Block3 = Decoder_Block(64 , "decoder_block_64")
+        self.Decoder_Block1 = Decoder_Block(256, "decoder_block_256")
+        self.Decoder_Block2 = Decoder_Block(128, 'decoder_block_128')
+        self.Decoder_Block3 = Decoder_Block(64, "decoder_block_64")
         # Output raw logits for numerical stability with the loss function
-        self.output_conv = tf.keras.layers.Conv3D(filters=num_classes ,kernel_size=(1,1,1), padding='same', name='output_head', dtype='float32')
+        self.output_conv = tf.keras.layers.Conv3D(
+            filters=num_classes, kernel_size=(1, 1, 1), padding='same', 
+            name='output_head', dtype='float32'
+        )
 
-    def call(self, convs ) :
+    def call(self, convs, original_shape=None):
         f1, f2, f3, f4 = convs
         x = self.SwinTransformer(f4)
 
-        x = self.Decoder_Block1(f3 , x)
-        x = self.Decoder_Block2(f2 , x)
-        x = self.Decoder_Block3(f1 , x)
+        x = self.Decoder_Block1(f3, x)
+        x = self.Decoder_Block2(f2, x)
+        x = self.Decoder_Block3(f1, x)
         x = self.output_conv(x)
         return x
 
 class SwinTransUnet(tf.keras.models.Model):
-    def __init__(self, config) :
+    def __init__(self, config):
         super().__init__()
         self.encoder = encoder()
         self.decoder = HybridDecoder(config)
 
-    def call(self, inputs) :
-        convs , _ = self.encoder(inputs)
+    def call(self, inputs):
+        # Store original input shape for restoring dimensions
+        input_shape = inputs.shape
+        
+        # Use dynamic shape for tensor operations, but use static shape for checks
+        dyn_input_shape = tf.shape(inputs)
+        
+        convs, _ = self.encoder(inputs)
         f1, f2, f3, f4 = convs
         x = self.decoder((f1, f2, f3, f4))
+        
+        # Ensure output matches input spatial dimensions exactly
+        output_shape = tf.shape(x)
+        
+        # OPTIMIZED FOR TPU: Check static shapes first
+        if (input_shape[1] is not None and input_shape[1] == x.shape[1] and
+            input_shape[2] is not None and input_shape[2] == x.shape[2] and
+            input_shape[3] is not None and input_shape[3] == x.shape[3]):
+            return x
+            
+        # Fallback to dynamic if shapes are unknown
+        pad_d = dyn_input_shape[1] - output_shape[1]
+        pad_h = dyn_input_shape[2] - output_shape[2]
+        pad_w = dyn_input_shape[3] - output_shape[3]
+        
+        x = tf.cond(
+            tf.logical_or(tf.logical_or(pad_d > 0, pad_h > 0), pad_w > 0),
+            lambda: tf.pad(x, [
+                [0, 0],
+                [0, tf.maximum(pad_d, 0)],
+                [0, tf.maximum(pad_h, 0)],
+                [0, tf.maximum(pad_w, 0)],
+                [0, 0]
+            ]),
+            lambda: x
+        )
+        
+        # Crop if output is larger than input
+        x = x[:, :dyn_input_shape[1], :dyn_input_shape[2], :dyn_input_shape[3], :]
+        
         return x
