@@ -618,9 +618,9 @@ GIFsvis.create\_slice\_scroll\_gif(plane='axial')vis.create\_slice\_scroll\_gif(
    </td>
    <td>UNET++
    </td>
-   <td>TBD
+   <td><strong>94.76%</strong>
    </td>
-   <td>TBD
+   <td><strong>90.44%</strong>
    </td>
   </tr>
   <tr>
@@ -628,9 +628,9 @@ GIFsvis.create\_slice\_scroll\_gif(plane='axial')vis.create\_slice\_scroll\_gif(
    </td>
    <td>TransUNET
    </td>
-   <td>TBD
+   <td><strong>91.06%</strong>
    </td>
-   <td>TBD
+   <td><strong>84.56%</strong>
    </td>
   </tr>
   <tr>
@@ -638,9 +638,9 @@ GIFsvis.create\_slice\_scroll\_gif(plane='axial')vis.create\_slice\_scroll\_gif(
    </td>
    <td>SwinTransUNET
    </td>
-   <td>TBD
+   <td><strong>91.62%</strong>
    </td>
-   <td>TBD
+   <td><strong>85.12%</strong>
    </td>
   </tr>
   <tr>
@@ -926,4 +926,5 @@ The following visualizations are from the **UNET++** model trained on Task01\_Br
 **Sagittal Plane Scroll :** 
 
 ![Alt Text](visualizations/task01/axial_scroll_sagittal.gif)
+
 
