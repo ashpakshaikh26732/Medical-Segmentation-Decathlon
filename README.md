@@ -927,4 +927,127 @@ The following visualizations are from the **UNET++** model trained on Task01\_Br
 
 ![Alt Text](visualizations/task01/axial_scroll_sagittal.gif)
 
+### **6.3. Qualitative Results: Task 02 (Heart)**
 
+The following visualizations demonstrate the performance of the **UNET++**, **TransUNet**, and **Swin-Unet** models trained on **Task02_Heart**.
+
+This task presents a unique challenge compared to brain tumor segmentation: the **Left Atrium** is a relatively small, highly variable structure surrounded by complex anatomical noise. The high performance here validates the pipeline's robustness across different modalities (MRI) and anatomical targets.
+
+#### **Quantitative Benchmark**
+
+We benchmarked three state-of-the-art architectures using the same OHEM-based training curriculum. The **UNET++** model achieved the highest performance, demonstrating that for this specific task, its deep supervision mechanism was highly effective at capturing the fine boundaries of the atrium.
+
+| Model | Foreground Dice (Left Atrium) | Mean Dice | Mean IoU |
+| :--- | :--- | :--- | :--- |
+| **UNET++** | **90.16%** | **94.76%** | **90.44%** |
+| **TransUNet** | 83.26% | 91.06% | 84.56% |
+| **Swin-Unet** | 84.26% | 91.62% | 85.12% |
+
+#### **1. Side-by-Side 3D Projection (UNET++)**
+
+This projection highlights the model's ability to capture the complete atrial geometry without disconnecting the pulmonary veins. The "Ghost Padding" artifact (which previously caused spatial shifts) has been completely resolved, as seen by the perfect alignment between the prediction and the scan.
+
+* **Left:** Original Cardiac MRI.
+* **Right:** Prediction (Green) overlaid on the anatomy.
+
+![Task 02 3D Projection](visualizations/task02/task02/unet_pp/1_3d_comparison_unet_pp_task2.gif)
+
+#### **2. Static 2D Slice Montage**
+
+A high-resolution contact sheet showing the model's performance across Axial, Coronal, and Sagittal planes at varying depths. Note the sharp boundary delineation between the atrium and the surrounding blood pool.
+
+![Task 02 Static Montage](visualizations/task02/unet_pp/1_static_montage_BRATS_001_unet_pp_task2.png)
+
+#### **3. Dynamic 2D Slice "Scroll-Throughs"**
+
+These GIFs visualize the full volumetric inference. The "sliding window" inference engine with Gaussian blending ensures there are no blocky artifacts at patch boundaries, creating a seamless 3D volume.
+
+**Axial Plane Scroll:**
+
+![Task 02 Axial Scroll](visualizations/task02/unet_pp/axial_scroll_axial_unet_pp_task2.gif)
+
+**Coronal Plane Scroll:**
+
+![Task 02 Coronal Scroll](visualizations/task02/unet_pp/axial_scroll_coronal_unet__pp_task2.gif)
+
+**Sagittal Plane Scroll:**
+
+![Task 02 Sagittal Scroll](visualizations/task02/unet_pp/axial_scroll_sagittal_unet_pp_task2.gif)
+
+#### **4. TransUNet Results (Task 02)**
+
+**TransUNet** combines the local feature extraction of CNNs with the global context modeling of Transformers. While slightly heavier, its ability to capture long-range dependencies proved valuable for distinguishing the atrium from similar-intensity structures in the background.
+
+| Model | Foreground Dice (Left Atrium) | Mean Dice | Mean IoU |
+| :--- | :--- | :--- | :--- |
+| **TransUNet** | **83.26%** | **91.06%** | **84.56%** |
+
+This projection highlights the model's ability to capture the complete atrial geometry without disconnecting the pulmonary veins. The "Ghost Padding" artifact (which previously caused spatial shifts) has been completely resolved, as seen by the perfect alignment between the prediction and the scan.
+
+* **Left:** Original Cardiac MRI.
+* **Right:** Prediction (Green) overlaid on the anatomy.
+
+![Task 02 3D Projection](visualizations/task02/trans_unet/1_3d_comparison_task2_swimtrainsunet.gif)
+
+#### **2. Static 2D Slice Montage**
+
+A high-resolution contact sheet showing the model's performance across Axial, Coronal, and Sagittal planes at varying depths. Note the sharp boundary delineation between the atrium and the surrounding blood pool.
+
+![Task 02 Static Montage](visualizations/task02/trans_unet/1_static_montage_task2_swimtrainsunet.png)
+
+#### **3. Dynamic 2D Slice "Scroll-Throughs"**
+
+These GIFs visualize the full volumetric inference. The "sliding window" inference engine with Gaussian blending ensures there are no blocky artifacts at patch boundaries, creating a seamless 3D volume.
+
+**Axial Plane Scroll:**
+
+![Task 02 Axial Scroll](visualizations/task02/trans_unet/axial_scroll_axial.gif)
+
+**Coronal Plane Scroll:**
+
+![Task 02 Coronal Scroll](visualizations/task02/trans_unet/axial_scroll_coronal.gif)
+
+**Sagittal Plane Scroll:**
+
+![Task 02 Sagittal Scroll](visualizations/task02/trans_unet/axial_scroll_sagittal.gif)
+
+---
+
+#### **5. Swin-Unet Results (Task 02)**
+
+**Swin-Unet** is a pure Transformer architecture that uses shifted windows to compute self-attention hierarchically. It achieved a higher Foreground Dice score than TransUNet (84.26%), suggesting that its pure-transformer approach is highly effective at modeling the complex geometry of the heart chambers.
+
+| Model | Foreground Dice (Left Atrium) | Mean Dice | Mean IoU |
+| :--- | :--- | :--- | :--- |
+| **Swin-Unet** | **84.26%** | **91.62%** | **85.12%** |
+
+This projection highlights the model's ability to capture the complete atrial geometry without disconnecting the pulmonary veins. The "Ghost Padding" artifact (which previously caused spatial shifts) has been completely resolved, as seen by the perfect alignment between the prediction and the scan.
+
+* **Left:** Original Cardiac MRI.
+* **Right:** Prediction (Green) overlaid on the anatomy.
+
+![Task 02 3D Projection](visualizations/task02/swim_trans_unet/1_3d_comparison_task2_swimtrainsunet.gif)
+
+#### **2. Static 2D Slice Montage**
+
+A high-resolution contact sheet showing the model's performance across Axial, Coronal, and Sagittal planes at varying depths. Note the sharp boundary delineation between the atrium and the surrounding blood pool.
+
+![Task 02 Static Montage](visualizations/task02/swim_trans_unet/1_static_montage_task2_swimtrainsunet.png)
+
+#### **3. Dynamic 2D Slice "Scroll-Throughs"**
+
+These GIFs visualize the full volumetric inference. The "sliding window" inference engine with Gaussian blending ensures there are no blocky artifacts at patch boundaries, creating a seamless 3D volume.
+
+**Axial Plane Scroll:**
+
+![Task 02 Axial Scroll](visualizations/task02/swim_trans_unet/axial_scroll_axial.gif)
+
+**Coronal Plane Scroll:**
+
+![Task 02 Coronal Scroll](visualizations/task02/swim_trans_unet/axial_scroll_coronal.gif)
+
+**Sagittal Plane Scroll:**
+
+![Task 02 Sagittal Scroll](visualizations/task02/swim_trans_unet/axial_scroll_sagittal.gif)
+
+---
