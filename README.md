@@ -678,9 +678,9 @@ GIFsvis.create\_slice\_scroll\_gif(plane='axial')vis.create\_slice\_scroll\_gif(
    </td>
    <td>UNET++
    </td>
-   <td>TBD
+   <td><strong>90.91%</strong>
    </td>
-   <td>TBD
+   <td><strong>83.91%</strong>
    </td>
   </tr>
   <tr>
@@ -688,9 +688,9 @@ GIFsvis.create\_slice\_scroll\_gif(plane='axial')vis.create\_slice\_scroll\_gif(
    </td>
    <td>TransUNET
    </td>
-   <td>TBD
+   <td>90.77%
    </td>
-   <td>TBD
+   <td>82.17%
    </td>
   </tr>
   <tr>
@@ -698,12 +698,11 @@ GIFsvis.create\_slice\_scroll\_gif(plane='axial')vis.create\_slice\_scroll\_gif(
    </td>
    <td>SwinTransUNET
    </td>
-   <td>TBD
+   <td>90.81%
    </td>
-   <td>TBD
+   <td>83.72%
    </td>
   </tr>
-  <tr>
    <td><strong>Task05: Prostate</strong>
    </td>
    <td>UNET++
@@ -1051,3 +1050,4 @@ These GIFs visualize the full volumetric inference. The "sliding window" inferen
 ![Task 02 Sagittal Scroll](visualizations/task02/swim_trans_unet/axial_scroll_sagittal.gif)
 
 ---
+
